@@ -27,6 +27,7 @@
 #include <numeric>    // std::iota
 
 #include "shell.h"
+#include "maxShellAlg.h"
 
 
 
@@ -36,7 +37,6 @@ struct {
 } MeshType;
 
 typedef std::pair<int, int> Edge;
-typedef std::unordered_map<Edge, Edge> EdgeMap;
 
 
 MObject shell::aPosThickness;
@@ -103,120 +103,6 @@ MStatus shell::initialize() {
 }
 
 
-
-
-
-
-MIntArray triangulateFaces(const MeshType& mesh){
-    int triCount = 0;
-    for (const auto &c: mesh.counts){
-        triCount += c - 2;
-    }
-
-    MIntArray ret;
-    ret.setLength(triCount);
-
-    int start = 0, end = 0;
-    int ptr = 0;
-    for (const auto &c: mesh.counts){
-        end += c;
-        for (int i = start + 1; i < end; i += 2){
-            ret[ptr++] = mesh.faces[start];
-            ret[ptr++] = mesh.faces[i];
-            ret[ptr++] = mesh.faces[i + 1];
-        }
-        start = end;
-    }
-    return ret;   
-}
-
-MIntArray reverseFaces(const MeshType& mesh) {
-    MIntArray ret;
-    ret.setLength(mesh.counts.length());
-
-    int idx = 0, pIdx = 0, j = 0;
-    for (const auto &c: mesh.counts){
-        idx += c;
-        for (int i = idx - 1; i >= pIdx; --i){
-            ret[j++] = mesh.faces[i];
-        }
-    }
-    return ret;
-}
-
-void insertOrErase(EdgeMap &map, int a, int b){
-    Edge key, val;
-    if (a < b){
-        key = std::make_pair(a, b);
-    }
-    else {
-        key = std::make_pair(b, a)
-    }
-    if (map.find(key) != map.end()){
-        map[key] = std::make_pair(a, b);
-    }
-    else{
-        map.erase(key);
-    }
-}
-
-std::unordered_set<Edge> findBorderEdges(const MeshType& mesh){
-    EdgeMap map;
-    int start = 0, end = 0;
-    for (const auto &c: mesh.counts){
-        end += c;
-        insertOrErase(map, mesh.faces[start], mesh.faces[end - 1]);
-        for (int i = start + 1; i < end; i++){
-            insertOrErase(map, mesh.faces[i], mesh.faces[i - 1]);
-        }
-        start = end;
-    }
-
-    std::unordered_set<Edge> borderSet;
-    for (std::pair<Edge, Edge> &kv : map){
-        borderSet.insert(kv.second);
-    }
-    return borderSet;
-}
-
-std::vector<Edge> sortBorderEdgesByTriangle(const std::unordered_set<Edge>& borderSet, const MIntArray& tris){
-    MIntArray ret;
-    ret.setLength(borderSet.size());
-    int idx = 0;
-    for (int i = 0; i < tris.length(); i += 3){
-        if (borderSet.find(std::make_pair(tris[i], tris[i + 1])) != borderSet.end()){
-            ret[idx++] = std::make_pair(tris[i], tris[i + 1]);
-        }
-        if (borderSet.find(std::make_pair(tris[i + 1], tris[i + 2])) != borderSet.end()){
-            ret[idx++] = std::make_pair(tris[i + 1], tris[i + 2]);
-        }
-        if (borderSet.find(std::make_pair(tris[i + 2], tris[i])) != borderSet.end()){
-            ret[idx++] = std::make_pair(tris[i + 2], tris[i]);
-        }
-    }
-    return ret;
-}
-
-
-
-
-
-
-
-
-void shellGeo(
-    const MPointArray& verts, const MIntArray& faces, const MIntArray& counts,
-    MPointArray& newVerts, MIntArray& newFaces, MIntArray& newCounts
-) {
-
-
-
-
-}
-
-
-
-
 shell::shell() {}
 shell::~shell() {}
 
@@ -233,7 +119,6 @@ MStatus shell::compute(
         return MStatus::kSuccess;
     }
 
-
 	MDataHandle hPos = dataBlock.inputValue(aPosThickness);
 	float pos = hPos.asFloat();
 
@@ -244,30 +129,29 @@ MStatus shell::compute(
 	int loops = hLoops.asInt();
 
 	MDataHandle hInput = dataBlock.inputValue(aInputGeom);
-    MObject inMesh = hInput.asMesh();
-
 	MDataHandle hOutput = dataBlock.outputValue(aOutputGeom);
-    // TODO: build the output mesh however
+    hOutput.set(hInput.asMesh());
+    MObject outMesh = hOutput.asMesh();
 
+    MFnMesh meshFn(outMesh);
 
-
-    // Get the mesh data
-    MFnMesh meshFn(inMesh);
-
-    MIntArray count, faces, newCounts, newFaces;
-    MPointArray verts, newVerts;
-
+    // Do the topology
+    MIntArray count, faces;
     meshFn.getVertices(count, faces);
+    std::vector<int> retFaces, retCounts;
+    auto bVerts = shellTopo(faces, counts, meshFn.numVertices(), loops, retFaces, retCounts);
+    MIntArray newCount(retCounts.data()), newFaces(retFaces.data());
 
-    shellGeo(verts, faces, counts, newVerts, newFaces, newCounts);
+    // Do the point positions
+    MPointArray verts;
+    MFloatVectorArray normals;
+    meshFn.getPoints(verts);
+    meshFn.getVertexNormals(false, normals);
+    auto newVerts = shellGeo(verts, normals, bVerts, loops, neg, pos);
 
-
-
-
-
-
-
-
+    // Make the output
+    meshFn.createInPlace(newVerts.length(), newCount.length(), newVerts, newCount, newFaces);
+    // TODO: Handle UV's
     return status;
 }
 

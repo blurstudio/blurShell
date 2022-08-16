@@ -13,6 +13,7 @@ set(CMAKE_INSTALL_PREFIX ${CMAKE_CURRENT_BINARY_DIR}/../output/maya/${MAYA_VERSI
 set(SOURCE_FILES
     "src/shell.h"
     "src/shell.cpp"
+    "src/maxShellAlg.h"
     "src/pluginMain.cpp"
 )
 
