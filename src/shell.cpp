@@ -22,6 +22,7 @@
 #include <vector>
 #include <pair>
 #include <unordered_map>
+#include <unordered_set>
 #include <algorithm>  // std::sort
 #include <numeric>    // std::iota
 
@@ -159,7 +160,7 @@ void insertOrErase(EdgeMap &map, int a, int b){
     }
 }
 
-MIntArray findBorderEdges(const MeshType& mesh){
+std::unordered_set<Edge> findBorderEdges(const MeshType& mesh){
     EdgeMap map;
     int start = 0, end = 0;
     for (const auto &c: mesh.counts){
@@ -170,51 +171,30 @@ MIntArray findBorderEdges(const MeshType& mesh){
         }
         start = end;
     }
-    MIntArray ret;
-    ret.setLength(map.size() * 2);
-    int ptr = 0;
+
+    std::unordered_set<Edge> borderSet;
     for (std::pair<Edge, Edge> &kv : map){
-        ret[ptr++] = kv.second.first;
-        ret[ptr++] = kv.second.second;
+        borderSet.insert(kv.second);
+    }
+    return borderSet;
+}
+
+std::vector<Edge> sortBorderEdgesByTriangle(const std::unordered_set<Edge>& borderSet, const MIntArray& tris){
+    MIntArray ret;
+    ret.setLength(borderSet.size());
+    int idx = 0;
+    for (int i = 0; i < tris.length(); i += 3){
+        if (borderSet.find(std::make_pair(tris[i], tris[i + 1])) != borderSet.end()){
+            ret[idx++] = std::make_pair(tris[i], tris[i + 1]);
+        }
+        if (borderSet.find(std::make_pair(tris[i + 1], tris[i + 2])) != borderSet.end()){
+            ret[idx++] = std::make_pair(tris[i + 1], tris[i + 2]);
+        }
+        if (borderSet.find(std::make_pair(tris[i + 2], tris[i])) != borderSet.end()){
+            ret[idx++] = std::make_pair(tris[i + 2], tris[i]);
+        }
     }
     return ret;
-}
-
-
-
-template <typename T>
-std::vector<size_t> argsort(const std::vector<T> &v) {
-
-    // initialize original index locations
-    std::vector<size_t> idx(v.size());
-    std::iota(idx.begin(), idx.end(), 0);
-
-    // sort indexes based on comparing values in v
-    std::stable_sort(idx.begin(), idx.end(),
-        [&v](size_t i1, size_t i2) {return v[i1] < v[i2];});
-
-    return idx;
-}
-
-size_t to64(int a, int b){
-    return (((size_t)tris[i]) << 32) | (size_t)tris[i + 1];
-}
-
-void sortBorderEdgesByTriangle(const MIntArray& bEdges, const MIntArray& tris){
-    std::unordered_map<Edge, size_t> ec;
-    for (int i = 0; i < tris.length(); i += 3){
-        ec[std::make_pair(tris[i], tris[i + 1])] = i;
-        ec[std::make_pair(tris[i + 1], tris[i + 2])] = i + 1;
-        ec[std::make_pair(tris[i + 2], tris[i])] = i + 2;
-    }
-    size_t edgeCount = bEdges.length() / 2;
-    std::vector<size_t> bcIdxs(edgeCount);
-    for (int i = 0; i < edgeCount; i++){
-        bcIdxs[i] = ec[std::make_pair(bEdges[2 * i], bEdges[(2 * i) + 1])];
-    }
-
-
-
 }
 
 
