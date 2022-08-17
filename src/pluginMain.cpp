@@ -9,7 +9,7 @@ MStatus initializePlugin(MObject obj) {
         DEFORMER_NAME,
         shell::id,
         shell::creator,
-        shell::initialize,
+        shell::initialize
     );
 	return result;
 }

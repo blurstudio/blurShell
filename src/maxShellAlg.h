@@ -13,6 +13,18 @@
 typedef std::pair<int, int> Edge;
 
 
+struct PairHash {
+    template <class T1, class T2>
+    std::size_t operator() (const std::pair<T1, T2> &pair) const {
+        auto h1 = std::hash<T1>()(pair.first);
+        auto h2 = std::hash<T2>()(pair.second);
+
+        // from boost::hash_combine
+        return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));
+    }
+};
+
+
 
 /*
 Naiively triangulate the given mesh
@@ -62,7 +74,7 @@ MIntArray reverseFaces(const MIntArray& faces, const MIntArray& counts, int offs
 Insert sorted(a,b):(a,b) into the map if it's not already in there
 If it IS in there, then remove it from the map
 */
-void insertOrErase(std::unordered_map<Edge, Edge> &map, int a, int b){
+void insertOrErase(std::unordered_map<Edge, Edge, PairHash> &map, int a, int b){
     Edge key, val;
     if (a < b){
         key = std::make_pair(a, b);
@@ -77,7 +89,6 @@ void insertOrErase(std::unordered_map<Edge, Edge> &map, int a, int b){
         map.erase(key);
     }
 }
-
 /*
 Build a vector of border edges in the order they appear in the given triangles
 */
@@ -85,21 +96,21 @@ std::vector<Edge> findSortedBorderEdges(MIntArray& tris){
     // keep track of whether the edges have been seen an even
     // or odd number of times. Only border edges will be seen an odd
     // number of times.
-    std::unordered_map<Edge, Edge> map;
-    for (int i = 0; i < tris.length(); i += 3){
+    std::unordered_map<Edge, Edge, PairHash> map;
+    for (uint i = 0; i < tris.length(); i += 3){
         insertOrErase(map, tris[i], tris[i + 2]);
         insertOrErase(map, tris[i + 1], tris[i]);
         insertOrErase(map, tris[i + 2], tris[i + 1]);
     }
 
-    std::unordered_set<Edge> borderSet;
+    std::unordered_set<Edge, PairHash> borderSet;
     for (const auto& kv : map){
         borderSet.insert(kv.second);
     }
 
     std::vector<Edge> ret(borderSet.size());
-    int idx = 0;
-    for (int i = 0; i < tris.length(); i += 3){
+    uint idx = 0;
+    for (uint i = 0; i < tris.length(); i += 3){
         if (borderSet.find(std::make_pair(tris[i], tris[i + 1])) != borderSet.end()){
             ret[idx++] = std::make_pair(tris[i], tris[i + 1]);
         }
@@ -115,7 +126,7 @@ std::vector<Edge> findSortedBorderEdges(MIntArray& tris){
 
 std::vector<int> buildCycles(const std::vector<Edge>& edges){
     std::unordered_map<int, int> startMap;
-    for (size_t i = 0; i < edges.size(); ++i){
+    for (int i = 0; i < edges.size(); ++i){
         startMap[edges[i].first] = i;
     }
     std::vector<int> cycle;
@@ -157,23 +168,23 @@ MIntArray shellTopo(
     std::vector<Edge> obEdges = findSortedBorderEdges(tris);
     std::vector<int> cycle = buildCycles(obEdges);
 
-    MIntArray firstEdges(obEdges.size());
+    MIntArray firstEdges((uint)obEdges.size());
     ptr = 0;
     for (const auto &e: obEdges){
         firstEdges[ptr++] = e.first;
     }
 
-    counts.setSizeIncrement(((numBridgeLoops + 1) * obEdges.size()));
-    faces.setSizeIncrement(((numBridgeLoops + 1) * obEdges.size() * 4));
+    counts.setSizeIncrement((uint)((numBridgeLoops + 1) * obEdges.size()));
+    faces.setSizeIncrement((uint)((numBridgeLoops + 1) * obEdges.size() * 4));
 
-    for (size_t loopIdx = 0; loopIdx < numBridgeLoops; ++loopIdx){
-        int curOffset = (loopIdx * obEdges.size()) + vertCount;
+    for (int loopIdx = 0; loopIdx < numBridgeLoops; ++loopIdx){
+        int curOffset = (loopIdx * (int)obEdges.size()) + vertCount;
         if (loopIdx == 0){
             // The first loop doesn't 
             curOffset -= vertCount;
         }
-        int nxtOffset = ((loopIdx + 1) * obEdges.size()) + vertCount;
-        for (size_t i = 1; i < obEdges.size(); ++i){
+        int nxtOffset = ((loopIdx + 1) * (int)obEdges.size()) + vertCount;
+        for (int i = 1; i < obEdges.size(); ++i){
             faces.append(obEdges[i].first + curOffset);
             faces.append(obEdges[i].first + nxtOffset);
             faces.append(obEdges[cycle[obEdges[i].first]].first + nxtOffset);
@@ -184,7 +195,7 @@ MIntArray shellTopo(
 
     int curOffset = 0;
     if (numBridgeLoops > 0){
-        curOffset = (numBridgeLoops * obEdges.size()) + vertCount;
+        curOffset = (numBridgeLoops * (int)obEdges.size()) + vertCount;
     }
     int nxtOffset = vertCount;
     for (size_t i = 1; i < obEdges.size(); ++i){
@@ -209,7 +220,7 @@ MFloatPointArray shellGeo(
 
     ret.setLength((initCount * 2) + ((numBridgeLoops - 1) * bIdxs.length()));
 
-    for (int i = 0; i < rawVerts.length(); ++i){
+    for (uint i = 0; i < rawVerts.length(); ++i){
         ret[i] = rawVerts[i] + (normals[i] * outerOffset);
         MVector x = normals[i] * innerOffset;
         ret[i + initCount] = rawVerts[i] - x;
@@ -217,7 +228,7 @@ MFloatPointArray shellGeo(
 
     int ptr = 2 * initCount;
     for (int i = 1; i < numBridgeLoops; ++i){
-        float perc = i / numBridgeLoops;
+        float perc = (float)i / numBridgeLoops;
         for (const auto& bi: bIdxs){
             ret[ptr++] = ret[bi] * perc + ret[bi + initCount] * (1.0 - perc);
         }
