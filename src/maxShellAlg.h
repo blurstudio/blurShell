@@ -35,7 +35,7 @@ MIntArray triangulateFaces(const MIntArray& faces, const MIntArray& counts){
         triCount += c - 2;
     }
 
-    MIntArray ret(triCount);
+    MIntArray ret(triCount * 3);
     int start = 0, end = 0;
     int ptr = 0;
     for (const auto &c: counts){
@@ -66,6 +66,7 @@ MIntArray reverseFaces(const MIntArray& faces, const MIntArray& counts, int offs
         for (int i = idx - 1; i >= pIdx; --i){
             ret[j++] = faces[i] + offset;
         }
+        pIdx = idx;
     }
     return ret;
 }
@@ -164,7 +165,7 @@ MIntArray shellTopo(
     }
 
     // TODO: May not have to triangulate
-    MIntArray tris = triangulateFaces(faces, counts);
+    MIntArray tris = triangulateFaces(oFaces, ioCounts);
     std::vector<Edge> obEdges = findSortedBorderEdges(tris);
     std::vector<int> cycle = buildCycles(obEdges);
 

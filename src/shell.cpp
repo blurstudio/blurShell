@@ -63,12 +63,12 @@ MStatus shell::initialize() {
 
 
 
-    aPosThickness = fnUnit.create("posThickness", "pt", MFnUnitAttribute::kDistance, 0.0);
+    aPosThickness = fnUnit.create("posThickness", "pt", MFnUnitAttribute::kDistance, 0.1);
     fnUnit.setStorable(true);
     fnUnit.setKeyable(true);
     stat = addAttribute(aPosThickness);
 
-    aPosThickness = fnUnit.create("negThickness", "nt", MFnUnitAttribute::kDistance, 0.0);
+    aNegThickness = fnUnit.create("negThickness", "nt", MFnUnitAttribute::kDistance, 0.1);
     fnUnit.setStorable(true);
     fnUnit.setKeyable(true);
     stat = addAttribute(aNegThickness);
@@ -85,7 +85,7 @@ MStatus shell::initialize() {
     stat = addAttribute(aInputGeom);
 
     aOutputGeom = fnTyped.create("outputGeom", "og", MFnData::kMesh);
-    stat = addAttribute(aInputGeom);
+    stat = addAttribute(aOutputGeom);
 
 
     std::vector<MObject *> iobjs = {
@@ -120,10 +120,10 @@ MStatus shell::compute(
     }
 
 	MDataHandle hPos = dataBlock.inputValue(aPosThickness);
-	float pos = hPos.asFloat();
+	float pos = (float)hPos.asDouble();
 
 	MDataHandle hNeg = dataBlock.inputValue(aNegThickness);
-	float neg = hNeg.asFloat();
+	float neg = (float)hNeg.asDouble();
 
 	MDataHandle hLoops = dataBlock.inputValue(aThickLoops);
 	int loops = hLoops.asInt();
