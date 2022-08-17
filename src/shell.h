@@ -30,7 +30,7 @@ public:
     static const MTypeId id;
 private:
     virtual MStatus compute(
-        const MPlug* plug,
+        const MPlug& plug,
 		MDataBlock& block
 	);
 };

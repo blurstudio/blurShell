@@ -1,11 +1,13 @@
 #pragma once
 
 #include <vector>
-#include <pair>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <maya/MPointArray.h>
+#include <maya/MFloatPointArray.h>
 #include <maya/MIntArray.h>
+#include <maya/MVector.h>
 #include <maya/MFloatVectorArray.h>
 
 typedef std::pair<int, int> Edge;
@@ -15,15 +17,13 @@ typedef std::pair<int, int> Edge;
 /*
 Naiively triangulate the given mesh
 */
-std::vector<int> triangulateFaces(const std::vector<int>& faces, const std::vector<int>& counts){
+MIntArray triangulateFaces(const MIntArray& faces, const MIntArray& counts){
     int triCount = 0;
     for (const auto &c: counts){
         triCount += c - 2;
     }
 
-    std::vector<int> ret;
-    ret.setLength(triCount);
-
+    MIntArray ret(triCount);
     int start = 0, end = 0;
     int ptr = 0;
     for (const auto &c: counts){
@@ -38,19 +38,21 @@ std::vector<int> triangulateFaces(const std::vector<int>& faces, const std::vect
     return ret;   
 }
 
+
+
+
 /*
 Given a mesh, reverse the order of each face so its normal goes in the
 opposite direction
 */
-template <class T>
-std::vector<int> reverseFaces(const T& faces, const T& counts, int offset) {
-    std::vector<int> ret;
+MIntArray reverseFaces(const MIntArray& faces, const MIntArray& counts, int offset) {
+    MIntArray ret(faces.length());
 
     int idx = 0, pIdx = 0, j = 0;
     for (const auto &c: counts){
         idx += c;
         for (int i = idx - 1; i >= pIdx; --i){
-            ret.push_back(faces[i] + offset);
+            ret[j++] = faces[i] + offset;
         }
     }
     return ret;
@@ -60,13 +62,13 @@ std::vector<int> reverseFaces(const T& faces, const T& counts, int offset) {
 Insert sorted(a,b):(a,b) into the map if it's not already in there
 If it IS in there, then remove it from the map
 */
-void insertOrErase(EdgeMap &map, int a, int b){
+void insertOrErase(std::unordered_map<Edge, Edge> &map, int a, int b){
     Edge key, val;
     if (a < b){
         key = std::make_pair(a, b);
     }
     else {
-        key = std::make_pair(b, a)
+        key = std::make_pair(b, a);
     }
     if (map.find(key) != map.end()){
         map[key] = std::make_pair(a, b);
@@ -79,25 +81,25 @@ void insertOrErase(EdgeMap &map, int a, int b){
 /*
 Build a vector of border edges in the order they appear in the given triangles
 */
-std::vector<Edge> findSortedBorderEdges(const std::vector<int>& tris){
+std::vector<Edge> findSortedBorderEdges(MIntArray& tris){
     // keep track of whether the edges have been seen an even
     // or odd number of times. Only border edges will be seen an odd
     // number of times.
     std::unordered_map<Edge, Edge> map;
-    for (int i = 0; i < tris.size(); i += 3){
+    for (int i = 0; i < tris.length(); i += 3){
         insertOrErase(map, tris[i], tris[i + 2]);
         insertOrErase(map, tris[i + 1], tris[i]);
         insertOrErase(map, tris[i + 2], tris[i + 1]);
     }
 
     std::unordered_set<Edge> borderSet;
-    for (std::pair<Edge, Edge> &kv : map){
+    for (const auto& kv : map){
         borderSet.insert(kv.second);
     }
 
     std::vector<Edge> ret(borderSet.size());
     int idx = 0;
-    for (int i = 0; i < tris.size(); i += 3){
+    for (int i = 0; i < tris.length(); i += 3){
         if (borderSet.find(std::make_pair(tris[i], tris[i + 1])) != borderSet.end()){
             ret[idx++] = std::make_pair(tris[i], tris[i + 1]);
         }
@@ -121,36 +123,48 @@ std::vector<int> buildCycles(const std::vector<Edge>& edges){
     for (size_t i = 0; i < edges.size(); ++i){
         cycle.push_back(startMap[edges[i].second]);
     }
-    return cycle
+    return cycle;
 }
 
 // Returns the border edge indices in order
-std::vector<int> shellTopo(
+MIntArray shellTopo(
     const MIntArray& oFaces, const MIntArray& ioCounts, int vertCount, int numBridgeLoops,
-    std::vector<int>& faces, std::vector<int>& counts, 
+    MIntArray& faces, MIntArray& counts
 ) {
-    // The outer faces stay the same.  The inner faces get reversed
+
+    counts.setLength(ioCounts.length() * 2);
+    int ptr = 0;
+    for (auto &c : ioCounts) {
+        counts[ptr++] = c;
+    }
+    for (auto &c : ioCounts) {
+        counts[ptr++] = c;
+    }
+
+
     auto iFaces = reverseFaces(oFaces, ioCounts, vertCount);
-
-    counts.insert(ioCounts.begin(), ioCounts.end());
-    counts.insert(counts.end(), ioCounts.begin(), ioCounts.end());
-
-    faces.insert(oFaces.begin(), oFaces.end());
-    faces.insert(faces.end(), iFaces.begin(), iFaces.end());
+    faces.setLength(oFaces.length() * 2);
+    ptr = 0;
+    for (auto &c : oFaces) {
+        faces[ptr++] = c;
+    }
+    for (auto &c : iFaces) {
+        faces[ptr++] = c;
+    }
 
     // TODO: May not have to triangulate
-    std::vector<int> tris = triangulateFaces(faces, counts);
+    MIntArray tris = triangulateFaces(faces, counts);
     std::vector<Edge> obEdges = findSortedBorderEdges(tris);
     std::vector<int> cycle = buildCycles(obEdges);
 
-    std::vector<int> firstEdges;
-    firstEdges.reserve(obEdges.size());
+    MIntArray firstEdges(obEdges.size());
+    ptr = 0;
     for (const auto &e: obEdges){
-        firstEdges.push_back(e.first);
+        firstEdges[ptr++] = e.first;
     }
 
-    counts.reserve(counts.size() + ((numBridgeLoops + 1) * obEdges.size()) );
-    faces.reserve(faces.size() + ((numBridgeLoops + 1) * obEdges.size() * 4));
+    counts.setSizeIncrement(((numBridgeLoops + 1) * obEdges.size()));
+    faces.setSizeIncrement(((numBridgeLoops + 1) * obEdges.size() * 4));
 
     for (size_t loopIdx = 0; loopIdx < numBridgeLoops; ++loopIdx){
         int curOffset = (loopIdx * obEdges.size()) + vertCount;
@@ -160,11 +174,11 @@ std::vector<int> shellTopo(
         }
         int nxtOffset = ((loopIdx + 1) * obEdges.size()) + vertCount;
         for (size_t i = 1; i < obEdges.size(); ++i){
-            faces.push_back(obEdges[i].first + curOffset);
-            faces.push_back(obEdges[i].first + nxtOffset);
-            faces.push_back(obEdges[cycle[obEdges[i].first]].first + nxtOffset);
-            faces.push_back(obEdges[cycle[obEdges[i].first]].first + curOffset);
-            counts.push_back(4);
+            faces.append(obEdges[i].first + curOffset);
+            faces.append(obEdges[i].first + nxtOffset);
+            faces.append(obEdges[cycle[obEdges[i].first]].first + nxtOffset);
+            faces.append(obEdges[cycle[obEdges[i].first]].first + curOffset);
+            counts.append(4);
         }
     }
 
@@ -174,30 +188,31 @@ std::vector<int> shellTopo(
     }
     int nxtOffset = vertCount;
     for (size_t i = 1; i < obEdges.size(); ++i){
-        faces.push_back(obEdges[i].first + curOffset);
-        faces.push_back(obEdges[i].first + nxtOffset);
-        faces.push_back(obEdges[cycle[obEdges[i].first]].first + nxtOffset);
-        faces.push_back(obEdges[cycle[obEdges[i].first]].first + curOffset);
-        counts.push_back(4);
+        faces.append(obEdges[i].first + curOffset);
+        faces.append(obEdges[i].first + nxtOffset);
+        faces.append(obEdges[cycle[obEdges[i].first]].first + nxtOffset);
+        faces.append(obEdges[cycle[obEdges[i].first]].first + curOffset);
+        counts.append(4);
     }
 
     return firstEdges;
 }
 
 
-MPointArray shellGeo(
-    const MPointArray& rawVerts, const MFloatVectorArray& normals, const std::vector<int>& bIdxs,
+MFloatPointArray shellGeo(
+    const MPointArray& rawVerts, const MFloatVectorArray& normals, const MIntArray& bIdxs,
     int numBridgeLoops, float innerOffset, float outerOffset
 ){
 
-    MPointArray ret;
+    MFloatPointArray ret;
     int initCount = rawVerts.length();
 
     ret.setLength((initCount * 2) + ((numBridgeLoops - 1) * bIdxs.length()));
 
     for (int i = 0; i < rawVerts.length(); ++i){
         ret[i] = rawVerts[i] + (normals[i] * outerOffset);
-        ret[i + initCount] = rawVerts[i] - (normals[i] * innerOffset);
+        MVector x = normals[i] * innerOffset;
+        ret[i + initCount] = rawVerts[i] - x;
     }
 
     int ptr = 2 * initCount;
