@@ -3,7 +3,6 @@
 #include <vector>
 #include <utility>
 #include <unordered_map>
-#include <unordered_set>
 #include <algorithm>
 #include <maya/MPointArray.h>
 #include <maya/MFloatPointArray.h>
@@ -24,7 +23,6 @@ struct PairHash {
         return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));
     }
 };
-
 
 
 /*
@@ -54,8 +52,6 @@ MIntArray triangulateFaces(const MIntArray& faces, const MIntArray& counts){
 }
 
 
-
-
 /*
 Given a mesh, reverse the order of each face so its normal goes in the
 opposite direction
@@ -73,6 +69,7 @@ MIntArray reverseFaces(const MIntArray& faces, const MIntArray& counts, int offs
     }
     return ret;
 }
+
 
 /*
 Insert sorted(a,b):(a,b) into the map if it's not already in there
@@ -98,6 +95,7 @@ void insertOrErase(std::unordered_map<Edge, std::pair<Edge, uint>, PairHash> &ma
 bool eiSort(const std::pair<Edge, uint>& a, const std::pair<Edge, uint>& b) {
     return a.second < b.second;
 }
+
 
 /*
 Build a vector of border edges in the order they appear in the given triangles
@@ -135,6 +133,7 @@ std::vector<Edge> findSortedBorderEdges(const MIntArray& oFaces, const MIntArray
     return ret;
 }
 
+
 std::vector<int> buildCycles(const std::vector<Edge>& edges){
     std::unordered_map<int, int> startMap;
     for (int i = 0; i < edges.size(); ++i){
@@ -149,7 +148,6 @@ std::vector<int> buildCycles(const std::vector<Edge>& edges){
 }
 
 
-
  int getBridgeIdx(int eIdx, int segIdx, int numBridgeSegs, int vertCount, const MIntArray& bIdxs) {
      if (segIdx == 0) {
          return bIdxs[eIdx];
@@ -161,14 +159,11 @@ std::vector<int> buildCycles(const std::vector<Edge>& edges){
  }
 
 
-
-
 // Returns the border edge indices in order
 MIntArray shellTopo(
     const MIntArray& oFaces, const MIntArray& ioCounts, int vertCount, int numBridgeSegs,
     MIntArray& faces, MIntArray& counts
 ) {
-
     std::vector<Edge> obEdges = findSortedBorderEdges(oFaces, ioCounts);
     std::vector<int> cycle = buildCycles(obEdges);
 
@@ -178,32 +173,20 @@ MIntArray shellTopo(
         firstEdges[eptr++] = e.first;
     }
 
-
-
-    counts.setLength((ioCounts.length() * 2) + (numBridgeSegs * (uint)obEdges.size()));
+    counts.setLength((ioCounts.length() * 2) + (numBridgeSegs * (uint)firstEdges.length()));
     int cptr = 0;
-    for (auto &c : ioCounts) {
-        counts[cptr++] = c;
-    }
-    for (auto &c : ioCounts) {
-        counts[cptr++] = c;
-    }
+    for (auto &c : ioCounts) { counts[cptr++] = c; }
+    for (auto &c : ioCounts) { counts[cptr++] = c; }
 
     auto iFaces = reverseFaces(oFaces, ioCounts, vertCount);
-    faces.setLength((oFaces.length() * 2) + (numBridgeSegs * (uint)obEdges.size() * 4));
+    faces.setLength((oFaces.length() * 2) + (numBridgeSegs * (uint)firstEdges.length() * 4));
     int fptr = 0;
-    for (auto &c : oFaces) {
-        faces[fptr++] = c;
-    }
-    for (auto &c : iFaces) {
-        faces[fptr++] = c;
-    }
-
-
+    for (auto &c : oFaces) { faces[fptr++] = c; }
+    for (auto &c : iFaces) { faces[fptr++] = c; }
 
     int inOffset = 0;
     for (int segIdx = 0; segIdx < numBridgeSegs; segIdx++) {
-        for (int eIdx = 0; eIdx < obEdges.size(); ++eIdx) {
+        for (int eIdx = 0; eIdx < firstEdges.length(); ++eIdx) {
             faces[fptr++] = getBridgeIdx(eIdx       , segIdx    , numBridgeSegs, vertCount, firstEdges);
             faces[fptr++] = getBridgeIdx(eIdx       , segIdx + 1, numBridgeSegs, vertCount, firstEdges);
             faces[fptr++] = getBridgeIdx(cycle[eIdx], segIdx + 1, numBridgeSegs, vertCount, firstEdges);
@@ -211,7 +194,6 @@ MIntArray shellTopo(
             counts[cptr++] = 4;
         }
     }
-
 
     return firstEdges;
 }
@@ -221,7 +203,6 @@ MFloatPointArray shellGeo(
     const MPointArray& rawVerts, const MFloatVectorArray& normals, const MIntArray& bIdxs,
     int numBridgeSegs, float innerOffset, float outerOffset
 ){
-
     MFloatPointArray ret;
     int initCount = rawVerts.length();
 
@@ -229,11 +210,9 @@ MFloatPointArray shellGeo(
 
     for (uint i = 0; i < rawVerts.length(); ++i){
         ret[i] = rawVerts[i] + (normals[i] * outerOffset);
-        MVector x = normals[i] * innerOffset;
-        ret[i + initCount] = rawVerts[i] - x;
+        ret[i + initCount] = rawVerts[i] - (MVector)(normals[i] * innerOffset);
     }
 
-    int inOffset = 0;
     for (int eIdx = 0; eIdx < bIdxs.length(); ++eIdx) {
         auto innerIdx = getBridgeIdx(eIdx, 0            , numBridgeSegs, initCount, bIdxs);
         auto outerIdx = getBridgeIdx(eIdx, numBridgeSegs, numBridgeSegs, initCount, bIdxs);
@@ -245,7 +224,3 @@ MFloatPointArray shellGeo(
     }
     return ret;
 }
-
-
-
-
