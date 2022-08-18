@@ -30,6 +30,7 @@
 #include "shell.h"
 #include "maxShellAlg.h"
 
+#include "xxhash.h"
 
 
 struct {
@@ -116,7 +117,7 @@ MStatus shell::compute(
 
     if (plug != aOutputGeom){
         // Only the output geom plug matters
-        return MStatus::kSuccess;
+        return MStatus::kUnknownParameter;
     }
 
 	MDataHandle hPos = dataBlock.inputValue(aPosThickness);
@@ -130,16 +131,24 @@ MStatus shell::compute(
 
 	MDataHandle hInput = dataBlock.inputValue(aInputGeom);
 	MDataHandle hOutput = dataBlock.outputValue(aOutputGeom);
+
     hOutput.set(hInput.asMesh());
     MObject outMesh = hOutput.asMesh();
-
     MFnMesh meshFn(outMesh);
 
     // Do the topology
-    MIntArray count, faces, newCount, newFaces;
+    MIntArray count, faces;
     meshFn.getVertices(count, faces);
-    std::vector<int> retFaces, retCounts;
-    auto bVerts = shellTopo(faces, count, meshFn.numVertices(), loops, newFaces, newCount);
+
+    // Hash the input topology so I can update if it changes
+    XXH64_hash_t cHashChk = XXH3_64bits(&(count[0]), count.length() * sizeof(int));
+    XXH64_hash_t fHashChk = XXH3_64bits(&(faces[0]), faces.length() * sizeof(int));
+    if ((loops != loopStore) || (cHashChk != cHash) || (fHashChk != fHash)) {
+        bVerts = shellTopo(faces, count, meshFn.numVertices(), loops, newFaces, newCount);
+        cHash = cHashChk;
+        fHash = fHashChk;
+        loopStore = loops;
+    }
 
     // Do the point positions
     MPointArray verts;
@@ -150,7 +159,10 @@ MStatus shell::compute(
 
     // Make the output
     meshFn.createInPlace(newVerts.length(), newCount.length(), newVerts, newCount, newFaces);
+
     // TODO: Handle UV's
+
+    hOutput.setClean();
     return status;
 }
 

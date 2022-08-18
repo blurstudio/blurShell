@@ -188,9 +188,9 @@ MIntArray shellTopo(
     for (int segIdx = 0; segIdx < numBridgeSegs; segIdx++) {
         for (uint eIdx = 0; eIdx < firstEdges.length(); ++eIdx) {
             faces[fptr++] = getBridgeIdx(eIdx       , segIdx    , numBridgeSegs, vertCount, firstEdges);
-            faces[fptr++] = getBridgeIdx(eIdx       , segIdx + 1, numBridgeSegs, vertCount, firstEdges);
-            faces[fptr++] = getBridgeIdx(cycle[eIdx], segIdx + 1, numBridgeSegs, vertCount, firstEdges);
             faces[fptr++] = getBridgeIdx(cycle[eIdx], segIdx    , numBridgeSegs, vertCount, firstEdges);
+            faces[fptr++] = getBridgeIdx(cycle[eIdx], segIdx + 1, numBridgeSegs, vertCount, firstEdges);
+            faces[fptr++] = getBridgeIdx(eIdx       , segIdx + 1, numBridgeSegs, vertCount, firstEdges);
             counts[cptr++] = 4;
         }
     }

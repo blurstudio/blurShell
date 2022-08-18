@@ -14,6 +14,8 @@ set(SOURCE_FILES
     "src/shell.h"
     "src/shell.cpp"
     "src/maxShellAlg.h"
+    "src/xxhash.c"
+    "src/xxhash.h"
     "src/pluginMain.cpp"
 )
 

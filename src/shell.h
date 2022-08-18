@@ -8,6 +8,7 @@
 
 #include <maya/MPxNode.h> 
 #include <maya/MItGeometry.h>
+#include "xxhash.h"
 
 #define DEFORMER_NAME "shell"
 
@@ -33,4 +34,11 @@ private:
         const MPlug& plug,
 		MDataBlock& block
 	);
+
+    XXH64_hash_t cHash = 0;
+    XXH64_hash_t fHash = 0;
+    MIntArray bVerts;
+    MIntArray newCount;
+    MIntArray newFaces;
+    int loopStore = 0;
 };
