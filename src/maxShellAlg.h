@@ -148,7 +148,7 @@ std::vector<int> buildCycles(const std::vector<Edge>& edges){
 }
 
 
- int getBridgeIdx(int eIdx, int segIdx, int numBridgeSegs, int vertCount, const MIntArray& bIdxs) {
+ int getBridgeIdx(uint eIdx, int segIdx, int numBridgeSegs, int vertCount, const MIntArray& bIdxs) {
      if (segIdx == 0) {
          return bIdxs[eIdx];
      }
@@ -186,7 +186,7 @@ MIntArray shellTopo(
 
     int inOffset = 0;
     for (int segIdx = 0; segIdx < numBridgeSegs; segIdx++) {
-        for (int eIdx = 0; eIdx < firstEdges.length(); ++eIdx) {
+        for (uint eIdx = 0; eIdx < firstEdges.length(); ++eIdx) {
             faces[fptr++] = getBridgeIdx(eIdx       , segIdx    , numBridgeSegs, vertCount, firstEdges);
             faces[fptr++] = getBridgeIdx(eIdx       , segIdx + 1, numBridgeSegs, vertCount, firstEdges);
             faces[fptr++] = getBridgeIdx(cycle[eIdx], segIdx + 1, numBridgeSegs, vertCount, firstEdges);
@@ -213,7 +213,7 @@ MFloatPointArray shellGeo(
         ret[i + initCount] = rawVerts[i] - (MVector)(normals[i] * innerOffset);
     }
 
-    for (int eIdx = 0; eIdx < bIdxs.length(); ++eIdx) {
+    for (uint eIdx = 0; eIdx < bIdxs.length(); ++eIdx) {
         auto innerIdx = getBridgeIdx(eIdx, 0            , numBridgeSegs, initCount, bIdxs);
         auto outerIdx = getBridgeIdx(eIdx, numBridgeSegs, numBridgeSegs, initCount, bIdxs);
         for (int segIdx = 1; segIdx < numBridgeSegs; segIdx++) {
