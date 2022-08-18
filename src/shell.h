@@ -40,5 +40,6 @@ private:
     MIntArray bVerts;
     MIntArray newCount;
     MIntArray newFaces;
+    MObject outMesh;
     int loopStore = 0;
 };

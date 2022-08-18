@@ -132,19 +132,18 @@ MStatus shell::compute(
 	MDataHandle hInput = dataBlock.inputValue(aInputGeom);
 	MDataHandle hOutput = dataBlock.outputValue(aOutputGeom);
 
-    hOutput.set(hInput.asMesh());
-    MObject outMesh = hOutput.asMesh();
-    MFnMesh meshFn(outMesh);
+    MObject inMesh = hInput.asMesh();
+    MFnMesh inFnMesh(inMesh);
 
-    // Do the topology
     MIntArray count, faces;
-    meshFn.getVertices(count, faces);
+    inFnMesh.getVertices(count, faces);
 
     // Hash the input topology so I can update if it changes
     XXH64_hash_t cHashChk = XXH3_64bits(&(count[0]), count.length() * sizeof(int));
     XXH64_hash_t fHashChk = XXH3_64bits(&(faces[0]), faces.length() * sizeof(int));
-    if ((loops != loopStore) || (cHashChk != cHash) || (fHashChk != fHash)) {
-        bVerts = shellTopo(faces, count, meshFn.numVertices(), loops, newFaces, newCount);
+    bool needNewTopo = (loops != loopStore) || (cHashChk != cHash) || (fHashChk != fHash);
+    if (needNewTopo) {
+        bVerts = shellTopo(faces, count, inFnMesh.numVertices(), loops, newFaces, newCount);
         cHash = cHashChk;
         fHash = fHashChk;
         loopStore = loops;
@@ -153,14 +152,22 @@ MStatus shell::compute(
     // Do the point positions
     MPointArray verts;
     MFloatVectorArray normals;
-    meshFn.getPoints(verts);
-    meshFn.getVertexNormals(false, normals);
+    inFnMesh.getPoints(verts);
+    inFnMesh.getVertexNormals(false, normals);
     auto newVerts = shellGeo(verts, normals, bVerts, loops, neg, pos);
 
-    // Make the output
-    meshFn.createInPlace(newVerts.length(), newCount.length(), newVerts, newCount, newFaces);
-
-    // TODO: Handle UV's
+    if (needNewTopo) {
+        // Create a new mesh MObject
+        hOutput.set(inMesh);
+        outMesh = hOutput.asMesh();
+        MFnMesh meshFn(outMesh);
+        meshFn.createInPlace(newVerts.length(), newCount.length(), newVerts, newCount, newFaces);
+    }
+    else {
+        hOutput.set(outMesh);
+        MFnMesh meshFn(outMesh);
+        meshFn.setPoints(newVerts);
+    }
 
     hOutput.setClean();
     return status;
