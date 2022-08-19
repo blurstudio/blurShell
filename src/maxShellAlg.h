@@ -39,9 +39,7 @@ MIntArray triangulateFaces(const MIntArray& faces, const MIntArray& counts){
     int ptr = 0;
     for (const auto &c: counts){
         end += c;
-        // Gotta triangulate from the *end* of the fan
-        // to make the numbers work out
-        for (int i = end - 2; i > start; i--){
+        for (int i = start + 1; i < end - 1; i++) {
             ret[ptr++] = faces[start];
             ret[ptr++] = faces[i];
             ret[ptr++] = faces[i + 1];
