@@ -12,7 +12,9 @@
 
 typedef std::pair<int, int> Edge;
 
-
+/*
+A hash function for std::pairs taken from boost::hash_combine
+*/
 struct PairHash {
     template <class T1, class T2>
     std::size_t operator() (const std::pair<T1, T2> &pair) const {
@@ -26,7 +28,8 @@ struct PairHash {
 
 
 /*
-Naiively triangulate the given mesh
+Naiively triangulate the given mesh by turning each face into a triangle fan
+starting with whatever happens to be the first index of the face.
 */
 MIntArray triangulateFaces(const MIntArray& faces, const MIntArray& counts){
     int triCount = 0;
@@ -70,8 +73,11 @@ MIntArray reverseFaces(const MIntArray& faces, const MIntArray& counts, int offs
 
 
 /*
-Insert sorted(a,b):(a,b) into the map if it's not already in there
-If it IS in there, then remove it from the map
+Insert a mapping from (sorted edge pair):(ordered edge pair) if the sorted
+edge pair isn't already in there.
+If it IS already in there, then remove it from the map
+This ensures that only edges with an odd number of connected faces
+(ie, border edges) will be in the map once we've looped through all the edges
 */
 void insertOrErase(std::unordered_map<Edge, std::pair<Edge, uint>, PairHash> &map, int a, int b, uint idx){
     Edge key, val;
@@ -90,6 +96,9 @@ void insertOrErase(std::unordered_map<Edge, std::pair<Edge, uint>, PairHash> &ma
 }
 
 
+/*
+A quick function to sort edge pairs by their second index
+*/
 bool eiSort(const std::pair<Edge, uint>& a, const std::pair<Edge, uint>& b) {
     return a.second < b.second;
 }
@@ -131,7 +140,11 @@ std::vector<Edge> findSortedBorderEdges(const MIntArray& oFaces, const MIntArray
     return ret;
 }
 
-
+/*
+Turn a vector of vertex pairs into an index cycle.
+The value at return[i] is the index of the next vertex
+around the border (ie, the one we need to make the bridging faces)
+*/
 std::vector<int> buildCycles(const std::vector<Edge>& edges){
     std::unordered_map<int, int> startMap;
     for (int i = 0; i < edges.size(); ++i){
@@ -146,6 +159,9 @@ std::vector<int> buildCycles(const std::vector<Edge>& edges){
 }
 
 
+/*
+Figure out the index of a particular vertex in the bridge
+*/
  int getBridgeIdx(uint eIdx, int segIdx, int numBridgeSegs, int vertCount, const MIntArray& bIdxs) {
      if (segIdx == 0) {
          return bIdxs[eIdx];
@@ -157,7 +173,12 @@ std::vector<int> buildCycles(const std::vector<Edge>& edges){
  }
 
 
-// Returns the border edge indices in order
+/*
+Build the edge and face connectivity of the shelled mesh. The vertex positions
+will be handled elsewhere.
+
+Returns the border edge indices in the 3dsMax order.
+*/
 MIntArray shellTopo(
     const MIntArray& oFaces, const MIntArray& ioCounts, int vertCount, int numBridgeSegs,
     MIntArray& faces, MIntArray& counts
@@ -196,7 +217,9 @@ MIntArray shellTopo(
     return firstEdges;
 }
 
-
+/*
+Build the vertex positions for the new mesh
+*/
 MFloatPointArray shellGeo(
     const MPointArray& rawVerts, const MFloatVectorArray& normals, const MIntArray& bIdxs,
     int numBridgeSegs, float innerOffset, float outerOffset
