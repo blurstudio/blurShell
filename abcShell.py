@@ -160,23 +160,233 @@ def reverseFaces(counts, faces):
     return faces[idAry.cumsum()]
 
 
-def _insertOrErase(edgeDict, ab, xy, idx):
-    """ If sorted([a, b]) is a key in the dict remove it from the dict
-    Otherwise add it with the unsorted value (a, b). This means that
-    only edges with an odd number of adjacent faces (ie, borders) will
-    be in the map
+def getEdgePairIdxs(counts, faces):
+    """ Build a 2*N array of ordered edge pairs """
+    # We're going to build a list of how many steps to take to get
+    # the next face-vertex. Most of those values will be 1 (meaning
+    # one step to the right), but at the end of each face, we need
+    # to step left back to the beginning
+
+    # Start with all 1's
+    idAry = np.ones(len(faces), dtype=int)
+    # Get the indices of the last index of each face
+    ends = np.r_[0, counts[:-1].cumsum()]
+    # Get how many steps back it is to the beginning of the face
+    idAry[ends] = -counts
+    # apply that offset to an arange to get the index of the next face-vert
+
+    # Now add the step value to the index value of each spot in the array
+    # to get the real indices of the next value around each face
+    return np.arange(len(faces), dtype=int) + idAry
+
+
+def findInArray(needles, haystack):
+    """Search for the indices of each needle in the haystack"""
+    # Much faster than using dicts
+    sorter = np.argsort(haystack)
+    return sorter[np.searchsorted(haystack, needles, sorter=sorter)]
+
+
+def buildCycles2(idxs, edges):
+    """Build cycles with the given indices and edges"""
+    return findInArray(edges[:, 1], idxs)
+
+def buildCycles(edges):
+    """Build cycles with the given indices and edges"""
+    return findInArray(edges[:, 1], edges[:, 0])
+
+
+
+
+def findFaceVertBorderPairs(counts, faces):
+    """ Find all border edges and their face indices
+    But make sure they're in the order that 3dsMax would provide them
 
     Arguments:
-        edgeDict (dict): A dict of {(a,b):(a,b)}
-        ab (tuple): An ordered pair of vertex indices connected by an edges
-        xy (tuple): The indices of a and b in the face array
+        counts (np.array): The number of verts per face
+        faces (np.array): The flattened indices of each vert
+
+    Returns:
+        np.array: An N*2 array of properly ordered vertex pairs
+        np.array: An N*2 array of indices into the faces array to
+            say which face-verts became these indices
+        np.array: An array of length N of the face index that
+            each vertex pair originated from
     """
-    a, b, = ab
-    key = (a, b) if a < b else (b, a)
-    if key in edgeDict:
-        del edgeDict[key]
-    else:
-        edgeDict[key] = ((ab, xy), idx)
+    nextIdxs = getEdgePairIdxs(counts, faces)
+    edgeDict = {}
+    for eIdx, nIdx in enumerate(nextIdxs):
+        a = faces[eIdx]
+        b = faces[nIdx]
+        key = (a, b) if a < b else (b, a)
+        if key in edgeDict:
+            del edgeDict[key]
+        else:
+            edgeDict[key] = eIdx
+
+    startIdxs = np.array(sorted(edgeDict.values()))
+    endIdxs = nextIdxs[startIdxs]
+
+    faceVertIdxBorderPairs = np.stack((startIdxs, endIdxs), axis=1)
+    return faceVertIdxBorderPairs
+
+
+
+def findSortedBorderEdges(counts, faces):
+    faceVertIdxBorderPairs = findFaceVertBorderPairs(counts, faces)
+    edges = faces[faceVertIdxBorderPairs]
+    stops = np.setdiff1d(edges[:, 1], edges[:, 0], assume_unique=True)
+
+
+
+
+
+
+
+
+
+
+
+def buildCycleBridges(startBorderVerts, endBorderVerts, cycle, bridgeFirstIdx, numBridgeSegs):
+    """ Build a bridge between a starting set of edges, and an ending set of edges
+    We assume that the starting/ending edge sets have the same order
+    We also assume that there are no edges along the border that don't form full
+    cycles
+
+    Arguments:
+        startBorderVerts (np.array): A Flat array of vertex indices that define
+            border edges for the starting loop
+        endBorderVerts (np.array): A Flat array of vertex indices that define
+            border edges for the ending loop
+        cycle (np.array): An array that defines the index of the vertex that's
+            the clockwise neighbor of the given index
+        bridgeFirstIdx (int): Where to start counting for newly created bridge indices
+        numBridgeSegs (int): The number of segments that the bridge will have between
+            the start and end. It has a minimum of 1
+
+    Returns:
+        np.array: The Face array that was created. This should extend the existing
+            face array for whatever mesh you're working on
+        np.array: The Count array that was created. This should extend the existing
+            count array for whatever mesh you're working on
+    """
+    numBorders = len(startBorderVerts)
+
+    oge, ogs = np.ogrid[:numBorders, :numBridgeSegs]
+    bFaces = np.zeros((numBorders, numBridgeSegs, 4), dtype=int)
+
+    # Build the raw bridge indices
+    # For simplicity of code, I don't special-case the parts where
+    # I'm going to connect back to the original meshes
+    bFaces[:, :, 0] = oge + (numBorders * (ogs - 1))
+    bFaces[:, :, 1] = cycle[oge] + (numBorders * (ogs - 1))
+    bFaces[:, :, 2] = cycle[oge] + (numBorders * ogs)
+    bFaces[:, :, 3] = oge + (numBorders * ogs)
+
+    # Offset these indices
+    bFaces += bridgeFirstIdx
+
+    # Connect them back to the original meshes
+    bFaces[:, 0, 0] = startBorderVerts[oge].flatten()
+    bFaces[:, 0, 1] = startBorderVerts[cycle[oge]].flatten()
+    bFaces[:, -1, 2] = endBorderVerts[cycle[oge]].flatten()
+    bFaces[:, -1, 3] = endBorderVerts[oge].flatten()
+    bFaces = bFaces.flatten()
+
+    # Counts is just a bunch of 4's
+    bCounts = np.full((numBorders * numBridgeSegs), 4)
+
+    return bFaces, bCounts
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def getBridgeIdx(eIdx, segIdx, numBridgeSegs, vertCount, bIdxs):
+    """ This is how we get the bridge indices in c++ """
+    if segIdx == 0:
+        return bIdxs[eIdx]
+    if segIdx == numBridgeSegs:
+        return bIdxs[eIdx] + vertCount
+    return (2 * vertCount) + eIdx + (len(bIdxs) * (segIdx - 1))
+
+
+
+
+def angleBetweenVectors(a, b):
+    # Apparently MUCH more numerically stable than
+    # acos of the dot product of the norms
+    an = a.norm()
+    bn = b.norm()
+    return 2 * np.atan2((an + bn).length(), (an - bn).length())
+
+
+
+def heightOfMidEdge(a, b, offset):
+    an = a.norm()
+    bn = b.norm()
+    return offset * (2 / (1 - np.dot(an, bn)))**0.5
+
+
+def shellUVs(vertFaces, oUvFaces, oUvCounts, numUVs, numBridgeSegs):
+    """
+    vertFaces (np.ndarray): The numpy array of faces for vertex indices
+    oUvFaces (np.ndarray): The numpy array of faces for UV indices
+
+    """
+
+
+
+
+    # distance of diagonal extension in UV space: H
+    # edge ofset: E
+
+
+    # cos of angle between a and b: CosAng = dot(a.norm(), b.norm()))
+    # sin of angle between a and b: SinAng = determinant(a.norm(), b.norm()))
+    # real counterclockwise angle = atan2(cosAng/sinAng)
+    # H = E * sqrt(2 / (1 - CosAng))
+
+    vertBorderPairs, faceVertIdxBorderPairs = findSortedBorderEdges(oUvCounts, oUvFaces)
+    uvBorderPairs = oUvFaces[faceVertIdxBorderPairs]
+
+
+    startMap = {uvBorderPairs[i][0]: i for i in range(len(uvBorderPairs))}
+    forwardCycles = np.array([startMap.get(edge[1], np.nan) for edge in uvBorderPairs])
+
+    endMap = {uvBorderPairs[i][1]: i for i in range(len(uvBorderPairs))}
+    backwardCycles = np.array([endMap.get(edge[0], np.nan) for edge in uvBorderPairs])
+
+
+
+
+
+
+
+
+
+
+
+
+    return forwardCycles, backwardCycles
+
+
+
+
+
+
+
 
 
 def findSortedBorderEdges(counts, faces):
@@ -194,163 +404,34 @@ def findSortedBorderEdges(counts, faces):
         np.array: An array of length N of the face index that
             each vertex pair originated from
     """
-    tris, faceVertIdxs, faceIdxs = triangulateFaces(counts, faces)
-
+    nextIdxs = getEdgePairIdxs(counts, faces)
     edgeDict = {}
-    for i in range(0, len(tris), 3):
-        triIdx = i // 3
-        _insertOrErase(
-            edgeDict,
-            (tris[i + 1], tris[i + 0]),
-            (faceVertIdxs[i + 1], faceVertIdxs[i + 0]),
-            faceIdxs[triIdx],
-            i + 0,
-        )
-        _insertOrErase(
-            edgeDict,
-            (tris[i + 2], tris[i + 1]),
-            (faceVertIdxs[i + 2], faceVertIdxs[i + 1]),
-            faceIdxs[triIdx],
-            i + 1,
-        )
-        _insertOrErase(
-            edgeDict,
-            (tris[i + 0], tris[i + 2]),
-            (faceVertIdxs[i + 0], faceVertIdxs[i + 2]),
-            faceIdxs[triIdx],
-            i + 2,
-        )
-
-    # Put the values of the map into an array
-    # Then sort that array by the edge index
-    idxPairs = sorted(edgeDict.values(), key=lambda x: x[-1])
-    # Trim the edge index out
-    idxPairs = np.array([i[:-2] for i in idxPairs])
-    triIdxs = np.array([i[-2] for i in idxPairs])
-
-    borderVertPairs = idxPairs[:, 0]
-    faceIndexPairs = idxPairs[:, 1]
-
-    return borderVertPairs, faceIndexPairs, triIdxs
-
-
-
-def getEdgePairs(counts, faces):
-    """ Build a 2*N array of ordered edge pairs """
-    # We're going to build a list of how many steps to take to get
-    # the next face-vertex. Most of those values will be 1 (meaning
-    # one step to the right), but at the end of each face, we need
-    # to step left back to the beginning
-
-    # Start with all 1's
-    idAry = np.ones(len(faces), dtype=int)
-    # Get the indices of the last index of each face
-    ends = np.r_[0, counts[:-1].cumsum()]
-    # Get how many steps back it is to the beginning of the face
-    idAry[ends] = -counts
-    # apply that offset to an arange to get the index of the next face-vert
-
-    # Now add the step value to the index value of each spot in the array
-    # to get the real indices of the next value around each face
-    nxtIdxs = np.arange(len(faces), dtype=int) + idAry
-
-    # Then apply that offset to the faces
-    nxt = faces[nxtIdxs]
-
-    # Finally get all the pairs as rows in an array
-    # by stacking the original faces, and nxt
-    pairs = np.stack((faces, nxt), axis=1)
-    return pairs
-
-
-
-def findSortedBorderEdges_NO_TRI(counts, faces):
-    """ Find all border edges and their face indices
-    But make sure they're in the order that 3dsMax would provide them
-
-    Arguments:
-        counts (np.array): The number of verts per face
-        faces (np.array): The flattened indices of each vert
-
-    Returns:
-        np.array: An N*2 array of properly ordered vertex pairs
-        np.array: An N*2 array of indices into the faces array to
-            say which face-verts became these indices
-        np.array: An array of length N of the face index that
-            each vertex pair originated from
-    """
-    pairs = getEdgePairs(counts, faces)
-    # Build an array that's the faceIndex for each edge pair
-    faceIdxs = np.repeat(np.arange(len(counts), dtype=int), counts)
-    # Build an array that's the index within the face of each edge pair
-    offsets = np.repeat(np.r_[0, np.cumsum(counts)][:-1], counts)
-    faceEdgeIdxs = np.arange(len(faceIdxs), dtype=int) - offsets
-
-    # Using a dict because it's WAY easier, and I've done most of the numpy
-    # transformations already
-    edgeDict = {}
-    for eIdx, pair in enumerate(pairs):
-        a, b, = pair
+    for eIdx, nIdx in enumerate(nextIdxs):
+        a = faces[eIdx]
+        b = faces[nIdx]
         key = (a, b) if a < b else (b, a)
         if key in edgeDict:
             del edgeDict[key]
         else:
             edgeDict[key] = eIdx
 
-    edgeIdxs = np.array(sorted(edgeDict.values()))
+    startIdxs = np.array(sorted(edgeDict.values()))
+    endIdxs = nextIdxs[startIdxs]
 
-    borderVertPairs = pairs[edgeIdxs]
-    borderFaceIdxs = faceIdxs[edgeIdxs]
-    borderFaceEdgeIdxStarts = faceEdgeIdxs[edgeIdxs]
-
-    return borderVertPairs, borderFaceIdxs, borderFaceEdgeIdxStarts
-
+    faceVertIdxBorderPairs = np.stack((startIdxs, endIdxs), axis=1)
+    borderPairs = faces[faceVertIdxBorderPairs]
+    return borderPairs, faceVertIdxBorderPairs
 
 
 
-def buildCycles(edges):
-    startMap = {edges[i][0]: i for i in range(len(edges))}
-    return np.array([startMap[edge[1]] for edge in edges])
-
-
-def getBridgeIdx(eIdx, segIdx, numBridgeSegs, vertCount, bIdxs):
-    """ This is how we get the bridge indices in c++ """
-    if segIdx == 0:
-        return bIdxs[eIdx]
-    if segIdx == numBridgeSegs:
-        return bIdxs[eIdx] + vertCount
-    return (2 * vertCount) + eIdx + (len(bIdxs) * (segIdx - 1))
-
-
-
-def shellUVs(vertFaces, oFaces, oCounts, uvCount, numBridgeSegs):
-    """
-    vertFaces (np.ndarray): The numpy array of faces for vertex indices
-    oFaces (np.ndarray): The numpy array of faces for UV indices
-
-    """
-    # each adjacent pair of indices in this array give the slice range
-    # into the vertFaces and oFaces arrays for that face index
-    faceRanges = np.r_[0, oCounts.cumsum()][:-1]
-
-
-    origBorderEdges, origBorderEdgeFaceIdxs, origFaceIdxs = findSortedBorderEdges(oCounts, oFaces)
-
-
-    pass
-
-
-
-
-
-def shellTopo(oFaces, ioCounts, vertCount, numBridgeSegs):
-    origBorderEdges, origBorderEdgeFaceIdxs, origFaceIdxs = findSortedBorderEdges(ioCounts, oFaces)
-    cycle = buildCycles(origBorderEdges)
+def shellTopo(oFaces, oCounts, vertCount, numBridgeSegs):
+    origBorderEdges, faceVertIdxBorderPairs = findSortedBorderEdges(oCounts, oFaces)
+    cycle = buildCycles(origBorderEdges, origBorderEdges[:, 0])
 
     borderVerts = [e[0] for e in origBorderEdges]
 
     brEdges = np.full(numBridgeSegs * len(borderVerts), 4, dtype=int)
-    counts = np.concatenate((ioCounts, ioCounts, brEdges), axis=0)
+    counts = np.concatenate((oCounts, oCounts, brEdges), axis=0)
 
     numBorders = len(borderVerts)
     offset = 2 * vertCount
@@ -370,7 +451,7 @@ def shellTopo(oFaces, ioCounts, vertCount, numBridgeSegs):
     bFaces[:, -1, 2] = borderVerts[cycle[oge]].flatten() + vertCount
     bFaces[:, -1, 3] = borderVerts[oge].flatten() + vertCount
 
-    iFaces = reverseFaces(ioCounts, oFaces) + vertCount
+    iFaces = reverseFaces(oCounts, oFaces) + vertCount
     faces = np.concatenate((oFaces, iFaces, bFaces))
 
     return counts, faces, borderVerts
