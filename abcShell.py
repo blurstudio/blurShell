@@ -161,7 +161,7 @@ def reverseFaces(counts, faces):
 
 
 def getEdgePairIdxs(counts, faces):
-    """ Build a 2*N array of ordered edge pairs """
+    """Build a 2*N array of ordered edge pairs"""
     # We're going to build a list of how many steps to take to get
     # the next face-vertex. Most of those values will be 1 (meaning
     # one step to the right), but at the end of each face, we need
@@ -198,7 +198,7 @@ def buildCycles(idxs, edges):
 
 
 def findFaceVertBorderPairs(counts, faces):
-    """ Find all border edges and their face indices
+    """Find all border edges and their face indices
     But make sure they're in the order that 3dsMax would provide them
 
     Arguments:
@@ -231,7 +231,7 @@ def findFaceVertBorderPairs(counts, faces):
 
 
 def findSortedBorderEdges(counts, faces, faceVertIdxBorderPairs):
-    """ Return the border verts and edge pairs in 3dsMax order
+    """Return the border verts and edge pairs in 3dsMax order
 
     Arguments:
         counts (np.array): Flat array of verts per face
@@ -256,8 +256,10 @@ def findSortedBorderEdges(counts, faces, faceVertIdxBorderPairs):
     return bVerts, edges
 
 
-def buildCycleBridges(startBorderVerts, endBorderVerts, cycle, bridgeFirstIdx, numBridgeSegs):
-    """ Build a bridge between a starting set of edges, and an ending set of edges
+def buildCycleBridges(
+    startBorderVerts, endBorderVerts, cycle, bridgeFirstIdx, numBridgeSegs
+):
+    """Build a bridge between a starting set of edges, and an ending set of edges
     We assume that the starting/ending edge sets have the same order
     We also assume that there are no edges along the border that don't form full
     cycles
@@ -328,7 +330,9 @@ def shellUvTopo(faceVertIdxBorderPairs, oUvFaces, oUvCounts, numUVs, numBridgeSe
     bridgeFirstIdx = numUVs * 2
 
     eVerts = cycle + bridgeFirstIdx + (len(bVerts) * numBridgeSegs)
-    bFaces, bCounts = buildCycleBridges(bVerts, eVerts, cycle, bridgeFirstIdx, numBridgeSegs)
+    bFaces, bCounts = buildCycleBridges(
+        bVerts, eVerts, cycle, bridgeFirstIdx, numBridgeSegs
+    )
 
     iUvFaces = reverseFaces(oUvCounts, oUvFaces) + numUVs
     faces = np.concatenate((oUvFaces, iUvFaces, bFaces))
@@ -338,7 +342,7 @@ def shellUvTopo(faceVertIdxBorderPairs, oUvFaces, oUvCounts, numUVs, numBridgeSe
 
 
 def shellUvGeo(uvs, bIdxs, prevIdxs, nxtIdxs, numBridgeSegs, offset):
-    """ Build the shell uv positions
+    """Build the shell uv positions
 
     Arguments:
         uvs (np.array): N*2 array of uv positions
@@ -366,7 +370,7 @@ def shellUvGeo(uvs, bIdxs, prevIdxs, nxtIdxs, numBridgeSegs, offset):
     prevVecs = _norm(uvs[prevIdxs] - uvs[bIdxs])
     nxtVecs = _norm(uvs[nxtIdxs] - uvs[bIdxs])
     halfAngles = np.arctan2(_lens(prevVecs + nxtVecs), _lens(prevVecs - nxtVecs))
-    rotVecs = (halfAngles * nxtVecs)  # TODO: This isn't how to do this. Fix it
+    rotVecs = halfAngles * nxtVecs  # TODO: This isn't how to do this. Fix it
 
     noPrevs = prevIdxs == -1
     noNxts = nxtIdxs == -1
@@ -377,7 +381,7 @@ def shellUvGeo(uvs, bIdxs, prevIdxs, nxtIdxs, numBridgeSegs, offset):
     scales[scales > 20] = 20.0  # set a max value
     rotVecs *= scales[..., None]
     outerVerts = rotVecs + uvs[bIdxs]
-    ret[-len(outerVerts):] = outerVerts
+    ret[-len(outerVerts) :] = outerVerts
 
     # The inner vert positions are easy
     innerVerts = ret[bIdxs]
@@ -459,19 +463,30 @@ def shellGeo(rawAnim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffset):
     return ret
 
 
-
-
-def shell(anim, normals, uvs, counts, faces, uvFaces, innerOffset, outerOffset, uvOffset, numBridgeSegs):
-
+def shell(
+    anim,
+    normals,
+    uvs,
+    counts,
+    faces,
+    uvFaces,
+    innerOffset,
+    outerOffset,
+    uvOffset,
+    numBridgeSegs,
+):
     faceVertIdxBorderPairs = findFaceVertBorderPairs(counts, faces)
     bIdxs, edges = findSortedBorderEdges(counts, faces, faceVertIdxBorderPairs)
     prevIdxs = []  # TODO
     nxtIdxs = []  # TODO
 
-    outUvFaces, outUvCounts = shellUvTopo(faceVertIdxBorderPairs, uvFaces, counts, len(uvs), numBridgeSegs)
+    outUvFaces, outUvCounts = shellUvTopo(
+        faceVertIdxBorderPairs, uvFaces, counts, len(uvs), numBridgeSegs
+    )
     outUvs = shellUvGeo(uvs, bIdxs, prevIdxs, nxtIdxs, numBridgeSegs, uvOffset)
-    outVertCounts, outVertFaces, _ = shellTopo(faceVertIdxBorderPairs, faces, counts, len(anim[1]), numBridgeSegs)
+    outVertCounts, outVertFaces, _ = shellTopo(
+        faceVertIdxBorderPairs, faces, counts, len(anim[1]), numBridgeSegs
+    )
     outAnim = shellGeo(anim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffset)
 
     return outAnim, outUvs, outVertCounts, outVertFaces, outUvFaces
-
