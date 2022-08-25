@@ -181,21 +181,20 @@ def getEdgePairIdxs(counts, faces):
 
 
 def findInArray(needles, haystack):
-    """Search for the indices of each needle in the haystack"""
-    # Much faster than using dicts
+    contains = np.in1d(needles, haystack)
+    defaults = np.full(needles.shape, -1)
+    needles = needles[contains]
+
     sorter = np.argsort(haystack)
-    return sorter[np.searchsorted(haystack, needles, sorter=sorter)]
+    ret = sorter[np.searchsorted(haystack, needles, sorter=sorter)]
+
+    defaults[contains] = ret
+    return defaults
 
 
-def buildCycles2(idxs, edges):
+def buildCycles(idxs, edges):
     """Build cycles with the given indices and edges"""
     return findInArray(edges[:, 1], idxs)
-
-def buildCycles(edges):
-    """Build cycles with the given indices and edges"""
-    return findInArray(edges[:, 1], edges[:, 0])
-
-
 
 
 def findFaceVertBorderPairs(counts, faces):
@@ -231,20 +230,30 @@ def findFaceVertBorderPairs(counts, faces):
     return faceVertIdxBorderPairs
 
 
+def findSortedBorderEdges(counts, faces, faceVertIdxBorderPairs):
+    """ Return the border verts and edge pairs in 3dsMax order
 
-def findSortedBorderEdges(counts, faces):
+    Arguments:
+        counts (np.array): Flat array of verts per face
+        faces (np.array): Flat array of face indices
+        faceVertIdxBorderPairs (np.array): N*2 array of indices
+            into the faces array that build border pairs. This
+            is the return from findFaceVertBorderPairs, and will
+            work for both verts and UVs
+
+    Returns:
+        np.array: Flat array of border vertices in order
+        np.array: N*2 array of edge pairs
+    """
     faceVertIdxBorderPairs = findFaceVertBorderPairs(counts, faces)
     edges = faces[faceVertIdxBorderPairs]
-    stops = np.setdiff1d(edges[:, 1], edges[:, 0], assume_unique=True)
-
-
-
-
-
-
-
-
-
+    stopVals = np.setdiff1d(edges[:, 1], edges[:, 0], assume_unique=True)
+    if stopVals.size == 0:
+        return edges[:, 0], edges
+    stopIdxs = findInArray(stopVals, edges[:, 1])
+    # I hope this is how 3dsMax does the order of these guys
+    bVerts = np.insert(edges[:, 0], stopIdxs, edges[stopIdxs, 1])
+    return bVerts, edges
 
 
 def buildCycleBridges(startBorderVerts, endBorderVerts, cycle, bridgeFirstIdx, numBridgeSegs):
@@ -252,6 +261,7 @@ def buildCycleBridges(startBorderVerts, endBorderVerts, cycle, bridgeFirstIdx, n
     We assume that the starting/ending edge sets have the same order
     We also assume that there are no edges along the border that don't form full
     cycles
+    This can be used for both Verts and UVs
 
     Arguments:
         startBorderVerts (np.array): A Flat array of vertex indices that define
@@ -299,141 +309,109 @@ def buildCycleBridges(startBorderVerts, endBorderVerts, cycle, bridgeFirstIdx, n
     return bFaces, bCounts
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def getBridgeIdx(eIdx, segIdx, numBridgeSegs, vertCount, bIdxs):
-    """ This is how we get the bridge indices in c++ """
-    if segIdx == 0:
-        return bIdxs[eIdx]
-    if segIdx == numBridgeSegs:
-        return bIdxs[eIdx] + vertCount
-    return (2 * vertCount) + eIdx + (len(bIdxs) * (segIdx - 1))
-
-
-
-
-def angleBetweenVectors(a, b):
-    # Apparently MUCH more numerically stable than
-    # acos of the dot product of the norms
-    an = a.norm()
-    bn = b.norm()
-    return 2 * np.atan2((an + bn).length(), (an - bn).length())
-
-
-
-def heightOfMidEdge(a, b, offset):
-    an = a.norm()
-    bn = b.norm()
-    return offset * (2 / (1 - np.dot(an, bn)))**0.5
-
-
-def shellUVs(vertFaces, oUvFaces, oUvCounts, numUVs, numBridgeSegs):
+def shellUvTopo(faceVertIdxBorderPairs, oUvFaces, oUvCounts, numUVs, numBridgeSegs):
     """
-    vertFaces (np.ndarray): The numpy array of faces for vertex indices
-    oUvFaces (np.ndarray): The numpy array of faces for UV indices
-
+    Arguments:
+        faceVertIdxBorderPairs (np.array): N*2 array of indices
+            into the faces array that build border pairs. This
+            is the return from findFaceVertBorderPairs, and will
+            work for both verts and UVs
+        oUvFaces (np.ndarray): The numpy array of faces for UV indices
+        oUvCounts (np.ndarray): The numpy array of counts for UV indices
+        numUVs (int): The number of UVs
+        numBridgeSegs (int): The number of segments that the bridge will have between
+            the start and end. It has a minimum of 1
     """
+    bVerts, edges = findSortedBorderEdges(oUvCounts, oUvFaces, faceVertIdxBorderPairs)
+    cycle = findInArray(edges[:, 1], bVerts)
+
+    bridgeFirstIdx = numUVs * 2
+
+    eVerts = cycle + bridgeFirstIdx + (len(bVerts) * numBridgeSegs)
+    bFaces, bCounts = buildCycleBridges(bVerts, eVerts, cycle, bridgeFirstIdx, numBridgeSegs)
+
+    iUvFaces = reverseFaces(oUvCounts, oUvFaces) + numUVs
+    faces = np.concatenate((oUvFaces, iUvFaces, bFaces))
+    counts = np.concatenate((oUvCounts, oUvCounts, bCounts), axis=0)
+
+    return faces, counts
 
 
-
-
-    # distance of diagonal extension in UV space: H
-    # edge ofset: E
-
-
-    # cos of angle between a and b: CosAng = dot(a.norm(), b.norm()))
-    # sin of angle between a and b: SinAng = determinant(a.norm(), b.norm()))
-    # real counterclockwise angle = atan2(cosAng/sinAng)
-    # H = E * sqrt(2 / (1 - CosAng))
-
-    vertBorderPairs, faceVertIdxBorderPairs = findSortedBorderEdges(oUvCounts, oUvFaces)
-    uvBorderPairs = oUvFaces[faceVertIdxBorderPairs]
-
-
-    startMap = {uvBorderPairs[i][0]: i for i in range(len(uvBorderPairs))}
-    forwardCycles = np.array([startMap.get(edge[1], np.nan) for edge in uvBorderPairs])
-
-    endMap = {uvBorderPairs[i][1]: i for i in range(len(uvBorderPairs))}
-    backwardCycles = np.array([endMap.get(edge[0], np.nan) for edge in uvBorderPairs])
-
-
-
-
-
-
-
-
-
-
-
-
-    return forwardCycles, backwardCycles
-
-
-
-
-
-
-
-
-
-def findSortedBorderEdges(counts, faces):
-    """ Find all border edges and their face indices
-    But make sure they're in the order that 3dsMax would provide them
+def shellUvGeo(uvs, bIdxs, prevIdxs, nxtIdxs, numBridgeSegs, offset):
+    """ Build the shell uv positions
 
     Arguments:
-        counts (np.array): The number of verts per face
-        faces (np.array): The flattened indices of each vert
+        uvs (np.array): N*2 array of uv positions
+        bIdxs (np.array): Int array of the uv indices along the border
+            that are being shelled
+        prevIdxs (np.array): Int array of the uv indices counter clockwise
+            from the bIdxs. If there is no vertex counterclockwise, then -1
+        nxtIdxs (np.array): Int array of the uv indices clockwise
+            from the bIdxs. If there is no vertex clockwise, then -1
+        numBridgeSegs (int): The number of segments on the bridge geo
+        offset (float): How far to perpendicularly offset the edges
+            in UV space
 
     Returns:
-        np.array: An N*2 array of properly ordered vertex pairs
-        np.array: An N*2 array of indices into the faces array to
-            say which face-verts became these indices
-        np.array: An array of length N of the face index that
-            each vertex pair originated from
+        np.array: N*2 array of uv positions with inner/outer shells
+            and borders
     """
-    nextIdxs = getEdgePairIdxs(counts, faces)
-    edgeDict = {}
-    for eIdx, nIdx in enumerate(nextIdxs):
-        a = faces[eIdx]
-        b = faces[nIdx]
-        key = (a, b) if a < b else (b, a)
-        if key in edgeDict:
-            del edgeDict[key]
-        else:
-            edgeDict[key] = eIdx
+    # Build the inner/outer layers, and reserve a chunk of memory
+    # for the bridge points
+    bVertCount = numBridgeSegs * bIdxs.length()
+    bUvs = np.zeros((bVertCount, 2))
+    ret = np.concatenate((uvs, uvs, bUvs))  # TODO: Don't reverse the iFaces for UV's
 
-    startIdxs = np.array(sorted(edgeDict.values()))
-    endIdxs = nextIdxs[startIdxs]
+    # Figure out the outer vert positions, and set them in the reserved space
+    prevVecs = _norm(uvs[prevIdxs] - uvs[bIdxs])
+    nxtVecs = _norm(uvs[nxtIdxs] - uvs[bIdxs])
+    halfAngles = np.arctan2(_lens(prevVecs + nxtVecs), _lens(prevVecs - nxtVecs))
+    rotVecs = (halfAngles * nxtVecs)  # TODO: This isn't how to do this. Fix it
 
-    faceVertIdxBorderPairs = np.stack((startIdxs, endIdxs), axis=1)
-    borderPairs = faces[faceVertIdxBorderPairs]
-    return borderPairs, faceVertIdxBorderPairs
+    noPrevs = prevIdxs == -1
+    noNxts = nxtIdxs == -1
+    rotVecs[noPrevs] = nxtVecs[noPrevs] * -90  # TODO: This isn't how to do this. Fix it
+    rotVecs[noNxts] = prevVecs[noNxts] * 90  # TODO: This isn't how to do this. Fix it
+
+    scales = offset * 2 / np.cos(halfAngles)
+    scales[scales > 20] = 20.0  # set a max value
+    rotVecs *= scales[..., None]
+    outerVerts = rotVecs + uvs[bIdxs]
+    ret[-len(outerVerts):] = outerVerts
+
+    # The inner vert positions are easy
+    innerVerts = ret[bIdxs]
+
+    # Interpolate between them
+    for segIdx in range(1, numBridgeSegs):
+        perc = float(segIdx) / numBridgeSegs
+        ring = innerVerts * (1.0 - perc) + outerVerts * perc
+        ringIdxs = bIdxs + ((2 * len(uvs)) + (len(bIdxs) * (segIdx - 1)))
+        ret[ringIdxs] = ring
+
+    return ret
 
 
+def shellTopo(faceVertIdxBorderPairs, oFaces, oCounts, vertCount, numBridgeSegs):
+    """
+    Arguments:
+        faceVertIdxBorderPairs (np.array): N*2 array of indices
+            into the faces array that build border pairs. This
+            is the return from findFaceVertBorderPairs, and will
+            work for both verts and UVs
+        oFaces (np.ndarray): The numpy array of faces for vert indices
+        oCounts (np.ndarray): The numpy array of counts for vert indices
+        vertCount (int): The number of verts
+        numBridgeSegs (int): The number of segments that the bridge will have between
+            the start and end. It has a minimum of 1
+    """
+    bVerts, edges = findSortedBorderEdges(oCounts, oFaces, faceVertIdxBorderPairs)
+    cycle = findInArray(edges[:, 1], bVerts)
 
-def shellTopo(oFaces, oCounts, vertCount, numBridgeSegs):
-    origBorderEdges, faceVertIdxBorderPairs = findSortedBorderEdges(oCounts, oFaces)
-    cycle = buildCycles(origBorderEdges, origBorderEdges[:, 0])
-
-    borderVerts = [e[0] for e in origBorderEdges]
-
-    brEdges = np.full(numBridgeSegs * len(borderVerts), 4, dtype=int)
+    brEdges = np.full(numBridgeSegs * len(bVerts), 4, dtype=int)
     counts = np.concatenate((oCounts, oCounts, brEdges), axis=0)
 
-    numBorders = len(borderVerts)
+    numBorders = len(bVerts)
     offset = 2 * vertCount
 
     oge, ogs = np.ogrid[:numBorders, :numBridgeSegs]
@@ -446,20 +424,15 @@ def shellTopo(oFaces, oCounts, vertCount, numBridgeSegs):
     bFaces[:, :, 3] = offset + oge + (numBorders * ogs)
 
     # Connect them back to the original meshes
-    bFaces[:, 0, 0] = borderVerts[oge].flatten()
-    bFaces[:, 0, 1] = borderVerts[cycle[oge]].flatten()
-    bFaces[:, -1, 2] = borderVerts[cycle[oge]].flatten() + vertCount
-    bFaces[:, -1, 3] = borderVerts[oge].flatten() + vertCount
+    bFaces[:, 0, 0] = bVerts[oge].flatten()
+    bFaces[:, 0, 1] = bVerts[cycle[oge]].flatten()
+    bFaces[:, -1, 2] = bVerts[cycle[oge]].flatten() + vertCount
+    bFaces[:, -1, 3] = bVerts[oge].flatten() + vertCount
 
     iFaces = reverseFaces(oCounts, oFaces) + vertCount
     faces = np.concatenate((oFaces, iFaces, bFaces))
 
-    return counts, faces, borderVerts
-
-
-
-
-
+    return counts, faces, bVerts
 
 
 def shellGeo(rawAnim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffset):
@@ -486,11 +459,19 @@ def shellGeo(rawAnim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffset):
     return ret
 
 
-def shell(anim, faces, counts, innerOffset, outerOffset, bridgeSegs):
-    vertCount = len(anim[1])
-    sCounts, sFaces, borderIdxs = shellTopo(faces, counts, vertCount, bridgeSegs)
-    normals = buildNormals(anim, counts, faces)
-    sAnim = shellGeo(anim, normals, borderIdxs, bridgeSegs, innerOffset, outerOffset)
 
-    return sAnim, sFaces, sCounts
+
+def shell(anim, normals, uvs, counts, faces, uvFaces, innerOffset, outerOffset, uvOffset, numBridgeSegs):
+
+    faceVertIdxBorderPairs = findFaceVertBorderPairs(counts, faces)
+    bIdxs, edges = findSortedBorderEdges(counts, faces, faceVertIdxBorderPairs)
+    prevIdxs = []  # TODO
+    nxtIdxs = []  # TODO
+
+    outUvFaces, outUvCounts = shellUvTopo(faceVertIdxBorderPairs, uvFaces, counts, len(uvs), numBridgeSegs)
+    outUvs = shellUvGeo(uvs, bIdxs, prevIdxs, nxtIdxs, numBridgeSegs, uvOffset)
+    outVertCounts, outVertFaces, _ = shellTopo(faceVertIdxBorderPairs, faces, counts, len(anim[1]), numBridgeSegs)
+    outAnim = shellGeo(anim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffset)
+
+    return outAnim, outUvs, outVertCounts, outVertFaces, outUvFaces
 
