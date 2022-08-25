@@ -14,69 +14,6 @@ def _norm(vecs):
     return vecs / _lens(vecs)[..., None]
 
 
-def buildNormals(anim, counts, faces):
-    """Build the per-vertex normals for a mesh
-
-    Arguments:
-        anim (np.array): A (frames, vertIdx, component) array of vertex positions
-        counts (np.array): The number of verts per face
-        faces (np.array): The flattened indices of each vert
-
-    Returns:
-        np.array: A (frames, vertIdx, component) array of per-vertex normals
-    """
-    # Get all adjacent vertex triples on the mesh
-    nextStep = np.arange(len(faces)) + 1
-
-    ranges = np.r_[0, counts.cumsum()]
-    ends = ranges[1:] - 1
-    nextStep[ends] = ranges[:-1]
-
-    trips = np.empty((len(faces), 3), dtype=int)
-    step = faces[nextStep]
-    trips[:, 0] = faces
-    trips[:, 1] = step
-    trips[:, 2] = step[nextStep]
-
-    # Get each edge as animated vectors
-    anim = anim.swapaxes(0, 1)
-    v1 = anim[trips[:, 0]] - anim[trips[:, 1]]
-    v2 = anim[trips[:, 2]] - anim[trips[:, 1]]
-
-    # Possibly get the triangle areas for weighting
-    # Technically I should divide by 2, but since the ratio is what matters
-    # I don't actually need to do that
-
-    # 3dsMax doesn't take the triangle areas into account when building the
-    # normals, but I could if I wanted to
-    # triAreas = _lens(np.cross(v1, v2))
-
-    # TODO: Handle zero vectors
-
-    # Normalize the vectors
-    v1 = _norm(v1)
-    v2 = _norm(v2)
-
-    # expand normalizing the face-vert Normals
-    # because we can use the crossProd length to determine
-    # the angle between the edges
-    fvn = np.cross(v2, v1)
-    fvnLens = _lens(fvn)
-    fvn = fvn / fvnLens[..., None]
-    angles = np.arcsin(fvnLens)
-
-    # Weight by the angles
-    weighted = fvn * angles[..., None]
-
-    # Now use a ufunc to sum things based on the center vert
-    out = np.zeros(anim.shape)
-    np.add.at(out, trips[:, 1], weighted)
-    out = _norm(out)
-    out[np.isnan(out)] = 0.0
-    out = out.swapaxes(0, 1)
-    return out
-
-
 def triangulateFaces(counts, faces):
     """Given the counts and faces of a mesh, return
     a faces array of the triangulated mesh
@@ -130,6 +67,75 @@ def triangulateFaces(counts, faces):
     return tris, fvIdxs, faceIdxs
 
 
+def buildNormals(anim, counts, faces, triangulate):
+    """Build the per-vertex normals for a mesh
+
+    Arguments:
+        anim (np.array): A (frames, vertIdx, component) array of vertex positions
+        counts (np.array): The number of verts per face
+        faces (np.array): The flattened indices of each vert
+        triangulate (bool): Whether to triangulate the mesh first
+
+    Returns:
+        np.array: A (frames, vertIdx, component) array of per-vertex normals
+    """
+
+    if triangulate:
+        faces = triangulateFaces(counts, faces)
+        counts = np.full((len(faces) // 3))
+
+    # Get all adjacent vertex triples on the mesh
+    nextStep = np.arange(len(faces)) + 1
+
+    ranges = np.r_[0, counts.cumsum()]
+    ends = ranges[1:] - 1
+    nextStep[ends] = ranges[:-1]
+
+    trips = np.empty((len(faces), 3), dtype=int)
+    step = faces[nextStep]
+    trips[:, 0] = faces
+    trips[:, 1] = step
+    trips[:, 2] = step[nextStep]
+
+    # Get each edge as animated vectors
+    anim = anim.swapaxes(0, 1)
+    v1 = anim[trips[:, 0]] - anim[trips[:, 1]]
+    v2 = anim[trips[:, 2]] - anim[trips[:, 1]]
+
+    # Possibly get the triangle areas for weighting
+    # Technically I should divide by 2, but since the ratio is what matters
+    # I don't actually need to do that
+
+    # 3dsMax doesn't take the triangle areas into account when building the
+    # normals, but I could if I wanted to
+    # triAreas = _lens(np.cross(v1, v2))
+
+    # TODO: Handle zero vectors
+
+    # Normalize the vectors
+    v1 = _norm(v1)
+    v2 = _norm(v2)
+
+    # expand normalizing the face-vert Normals
+    # because we can use the crossProd length to determine
+    # the angle between the edges
+    fvn = np.cross(v2, v1)
+    fvnLens = _lens(fvn)
+    fvn = fvn / fvnLens[..., None]
+    angles = np.arcsin(fvnLens)
+
+    # Weight by the angles
+    weighted = fvn * angles[..., None]
+
+    # Now use a ufunc to sum things based on the center vert
+    out = np.zeros(anim.shape)
+    np.add.at(out, trips[:, 1], weighted)
+    out = _norm(out)
+    out[np.isnan(out)] = 0.0
+    out = out.swapaxes(0, 1)
+    return out
+
+
 def reverseFaces(counts, faces):
     """Reverse the winding of the given faces
 
@@ -181,6 +187,15 @@ def getEdgePairIdxs(counts, faces):
 
 
 def findInArray(needles, haystack):
+    """ Find the indices of values in an array
+
+    Arguments:
+        needles (np.array): The values to search for
+        haystack (np.array): The array to search in
+
+    Returns:
+        np.array: The index of needle in haystack, or -1 if not found
+    """
     contains = np.in1d(needles, haystack)
     defaults = np.full(needles.shape, -1)
     needles = needles[contains]
@@ -190,11 +205,6 @@ def findInArray(needles, haystack):
 
     defaults[contains] = ret
     return defaults
-
-
-def buildCycles(idxs, edges):
-    """Build cycles with the given indices and edges"""
-    return findInArray(edges[:, 1], idxs)
 
 
 def findFaceVertBorderPairs(counts, faces):
@@ -341,7 +351,7 @@ def shellUvTopo(faceVertIdxBorderPairs, oUvFaces, oUvCounts, numUVs, numBridgeSe
     return faces, counts
 
 
-def shellUvGeo(uvs, bIdxs, prevIdxs, nxtIdxs, numBridgeSegs, offset):
+def shellUvPos(uvs, bIdxs, prevIdxs, nxtIdxs, numBridgeSegs, offset):
     """Build the shell uv positions
 
     Arguments:
@@ -439,7 +449,20 @@ def shellTopo(faceVertIdxBorderPairs, oFaces, oCounts, vertCount, numBridgeSegs)
     return counts, faces, bVerts
 
 
-def shellGeo(rawAnim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffset):
+def shellVertPos(rawAnim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffset):
+    """ Build the vertex positions for the shell
+
+    Arguments:
+        rawAnim (np.array): F*N*3 array of point positions
+        normals (np.array): F*N*3 array of normal vectors
+        bIdxs (np.array): The indices of the border vertices
+        numBridgeSegs (int): The number of segments for the bridge
+        innerOffset (float): The distance to move the inside of the shell
+        outerOffset (float): The distance to move the outside of the shell
+
+    Returns:
+        np.array: F*N*3 array of new point positions
+    """
     numFrames = len(rawAnim)
 
     bVertCount = (numBridgeSegs - 1) * bIdxs.length()
@@ -465,7 +488,6 @@ def shellGeo(rawAnim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffset):
 
 def shell(
     anim,
-    normals,
     uvs,
     counts,
     faces,
@@ -475,6 +497,38 @@ def shell(
     uvOffset,
     numBridgeSegs,
 ):
+    """ Extrude flat planes of geometry, give them thickness,
+    and add a number of loops to thickened edges
+
+    Arguments:
+        anim (np.array): A N*3 or F*N*3 array of point positions
+        uvs (np.array): A N*2 array of uv positions
+        counts (np.array): A flat array of vert counts per face
+        faces (np.array): A flat array of vert indices, grouped by count
+        uvFaces (np.array): A flat array of uv indices, grouped by count
+        innerOffset (float): The amount to move the inner side
+        outerOffset (float): The amount to move the outer side
+        uvOffset (float): The width of the bridge in UV space
+        numBridgeSegs (int): The number of segments to split the bridge
+            into. Its minimum value is 1
+
+    Returns:
+        np.array: The vertex positions with the same number of dimensions
+            as the `anim` input
+        np.array: The UV positions
+        np.array: The new counts array
+        np.array: The new faces array
+        np.array: The new uvFaces array
+    """
+    padded = anim.ndims == 2
+    if padded:
+        anim = anim[None, ...]
+
+    if numBridgeSegs < 1:
+        raise ValueError("The minimum number of bridge segments is 1. Got {0}".format(numBridgeSegs))
+
+    normals = buildNormals(anim, counts, faces, triangulate=True)
+
     faceVertIdxBorderPairs = findFaceVertBorderPairs(counts, faces)
     bIdxs, edges = findSortedBorderEdges(counts, faces, faceVertIdxBorderPairs)
     prevIdxs = []  # TODO
@@ -483,10 +537,13 @@ def shell(
     outUvFaces, outUvCounts = shellUvTopo(
         faceVertIdxBorderPairs, uvFaces, counts, len(uvs), numBridgeSegs
     )
-    outUvs = shellUvGeo(uvs, bIdxs, prevIdxs, nxtIdxs, numBridgeSegs, uvOffset)
+    outUvs = shellUvPos(uvs, bIdxs, prevIdxs, nxtIdxs, numBridgeSegs, uvOffset)
     outVertCounts, outVertFaces, _ = shellTopo(
         faceVertIdxBorderPairs, faces, counts, len(anim[1]), numBridgeSegs
     )
-    outAnim = shellGeo(anim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffset)
+    outAnim = shellVertPos(anim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffset)
+
+    if padded:
+        outAnim = outAnim[0]
 
     return outAnim, outUvs, outVertCounts, outVertFaces, outUvFaces
