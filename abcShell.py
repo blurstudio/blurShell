@@ -1,11 +1,19 @@
 import numpy as np
 
+def _dot(A, B):
+    """Get the lengths of a bunch of vectors
+    Use the einsum instead of the dot product because its
+    it's almost always faster than np.dot
+    """
+    return np.einsum('...ij,...ij->...i', A, B)
+
+
 def _lens(vecs):
     """Get the lengths of a bunch of vectors
     Use the einsum instead of the dot product because its
     it's almost always faster than np.dot
     """
-    return np.sqrt(np.einsum('...ij,...ij->...i', vecs, vecs))
+    return np.sqrt(_dot(vecs, vecs))
 
 
 def _norm(vecs):
@@ -294,7 +302,7 @@ def buildCycleBridges(
         np.array: The Count array that was created. This should extend the existing
             count array for whatever mesh you're working on
     """
-    numBorders = len(startBorderVerts)
+    numBorders = len(cycle)
 
     oge, ogs = np.ogrid[:numBorders, :numBridgeSegs]
     bFaces = np.zeros((numBorders, numBridgeSegs, 4), dtype=int)
@@ -339,9 +347,26 @@ def shellUvTopo(faceVertIdxBorderPairs, oUvFaces, oUvCounts, numUVs, numBridgeSe
     bVerts, edges = findSortedBorderEdges(oUvCounts, oUvFaces, faceVertIdxBorderPairs)
     cycle = findInArray(edges[:, 1], bVerts)
 
+
+    nxtFind = findInArray(bVerts, edges[:, 0])
+    nxt = edges[nxtFind, 1]
+    nxt[nxtFind == -1] = -1
+
+    prevFind = findInArray(bVerts, edges[:, 1])
+    prev = edges[prevFind, 0]
+    prev[prevFind == -1] = -1
+
+
+
+
+
+
+
     bridgeFirstIdx = numUVs * 2
 
-    eVerts = cycle + bridgeFirstIdx + (len(bVerts) * numBridgeSegs)
+    eVerts = bVerts + bridgeFirstIdx + (len(bVerts) * numBridgeSegs)
+
+
     bFaces, bCounts = buildCycleBridges(
         bVerts, eVerts, cycle, bridgeFirstIdx, numBridgeSegs
     )
@@ -370,42 +395,63 @@ def shellUvPos(uvs, bIdxs, uvEdges, numBridgeSegs, offset):
             and borders
     """
 
-
-
     nxtFind = findInArray(bIdxs, uvEdges[:, 0])
-    nxt = uvEdges[nxtFind, 1]
-    nxt[nxtFind == -1] = -1
+    nxtIdxs = uvEdges[nxtFind, 1]
+    nxtIdxs[nxtFind == -1] = -1
+    noNxts = nxtIdxs == -1
 
     prevFind = findInArray(bIdxs, uvEdges[:, 1])
-    prev = uvEdges[prevFind, 0]
-    prev[prevFind == -1] = -1
-
-
-
-
+    prevIdxs = uvEdges[prevFind, 0]
+    prevIdxs[prevFind == -1] = -1
+    noPrevs = prevIdxs == -1
 
     # Build the inner/outer layers, and reserve a chunk of memory
     # for the bridge points
     bVertCount = numBridgeSegs * len(bIdxs)
     bUvs = np.zeros((bVertCount, 2))
-    ret = np.concatenate((uvs, uvs, bUvs))  # TODO: Don't reverse the iFaces for UV's
+    ret = np.concatenate((uvs, uvs, bUvs))
+
+
 
     # Figure out the outer vert positions, and set them in the reserved space
-    prevVecs = _norm(uvs[prevIdxs] - uvs[bIdxs])
-    nxtVecs = _norm(uvs[nxtIdxs] - uvs[bIdxs])
-    halfAngles = np.arctan2(_lens(prevVecs + nxtVecs), _lens(prevVecs - nxtVecs))
-    rotVecs = halfAngles * nxtVecs  # TODO: This isn't how to do this. Fix it
+    prevVecs = uvs[prevIdxs] - uvs[bIdxs]
+    nxtVecs = uvs[nxtIdxs] - uvs[bIdxs]
 
-    noPrevs = prevIdxs == -1
-    noNxts = nxtIdxs == -1
-    rotVecs[noPrevs] = nxtVecs[noPrevs] * -90  # TODO: This isn't how to do this. Fix it
-    rotVecs[noNxts] = prevVecs[noNxts] * 90  # TODO: This isn't how to do this. Fix it
+    pvw = prevVecs == 0
+    pvw = pvw[:, 0] & pvw[:, 1]
+    prevVecs[pvw, 0] = 1.0
+
+    nvw = nxtVecs == 0
+    nvw = nvw[:, 0] & nvw[:, 1]
+    nxtVecs[nvw, 0] = 1.0
+
+    prevVecs = _norm(prevVecs)
+    nxtVecs = _norm(nxtVecs)
+
+    halfAngles = np.arctan2(_lens(prevVecs + nxtVecs), _lens(prevVecs - nxtVecs))
+
+    cosAngles = np.cos(halfAngles)
+    sinAngles = np.sin(halfAngles)
+
+    rotMat = np.empty((len(nxtVecs), 2, 2))
+    rotMat[:, 0, 0] = cosAngles
+    rotMat[:, 0, 1] = sinAngles
+    rotMat[:, 1, 1] = cosAngles
+    rotMat[:, 1, 0] = -sinAngles
+
+    r90 = np.array([[[0, 1], [-1, 0]]])
+    rotMat[noPrevs] = r90
+    rotMat[noNxts] = -r90
+
+    rotVecs = np.einsum('ij, ijk -> ik', nxtVecs, rotMat)
 
     scales = offset * 2 / np.cos(halfAngles)
     scales[scales > 20] = 20.0  # set a max value
     rotVecs *= scales[..., None]
     outerVerts = rotVecs + uvs[bIdxs]
     ret[-len(outerVerts) :] = outerVerts
+
+
 
     # The inner vert positions are easy
     innerVerts = ret[bIdxs]
@@ -458,7 +504,7 @@ def shellTopo(faceVertIdxBorderPairs, oFaces, oCounts, vertCount, numBridgeSegs)
     bFaces[:, -1, 3] = bVerts[oge].flatten() + vertCount
 
     iFaces = reverseFaces(oCounts, oFaces) + vertCount
-    faces = np.concatenate((oFaces, iFaces, bFaces))
+    faces = np.concatenate((oFaces, iFaces, bFaces.flatten()))
 
     return counts, faces, bVerts
 
@@ -554,7 +600,7 @@ def shell(
     outUvs = shellUvPos(uvs, bUvIdxs, uvEdges, numBridgeSegs, uvOffset)
 
     outVertCounts, outVertFaces, _ = shellTopo(
-        faceVertIdxBorderPairs, faces, counts, len(anim[1]), numBridgeSegs
+        faceVertIdxBorderPairs, faces, counts, anim.shape[1], numBridgeSegs
     )
     outAnim = shellVertPos(anim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffset)
 
@@ -565,10 +611,13 @@ def shell(
 
 
 
-if __name__ == "__main__":
+
+def _test():
     import json
 
     # Why json? Because fuck you flake8 for now allowing local ignores
+
+    # 2x2x2 box with missing bottom face
     jsInput = json.loads("""{
         "anim" : [
             [-0.5, -0.5,  0.5], [ 0.0, -0.5,  0.5], [ 0.5, -0.5,  0.5],
@@ -715,6 +764,77 @@ if __name__ == "__main__":
     }""")
 
 
+    # 1x1x2 box with missing bottom face
+    jsInput = json.loads("""{
+        "uvs": [
+            [0.375, 0.325], [0.625, 0.325], [0.375, 0.450], [0.625, 0.450],
+            [0.375, 0.675], [0.625, 0.675], [0.375, 0.075], [0.625, 0.075],
+            [0.875, 0.325], [0.875, 0.450], [0.875, 0.675], [0.625, 0.925],
+            [0.375, 0.925], [0.125, 0.675], [0.125, 0.550], [0.125, 0.325],
+            [0.375, 0.550], [0.625, 0.550], [0.875, 0.550], [0.125, 0.450]
+        ],
+        "counts": [4, 4, 4, 4, 4, 4, 4, 4],
+        "anim": [
+            [-5.0,  0.0,  5.0], [5.0,  0.0,  5.0], [-5.0,  0.0,  0.0], [5.0,  0.0,  0.0],
+            [-5.0,  0.0, -5.0], [5.0,  0.0, -5.0], [-5.0, 10.0,  5.0], [5.0, 10.0,  5.0],
+            [-5.0, 10.0,  0.0], [5.0, 10.0,  0.0], [-5.0, 10.0, -5.0], [5.0, 10.0, -5.0]
+        ],
+        "uvFaces": [
+            2,3,1,0,     4,5,17,16,  0,1,7,6,     1,3,9,8,
+            17,5,10,18,  5,4,12,11,  4,16,14,13,  2,0,15,19
+        ],
+        "faces": [
+            8,9,7,6,   10,11,9,8,  6,7,1,0,   7,9,3,1,
+            9,11,5,3,  11,10,4,5,  10,8,2,4,  8,6,0,2
+        ]
+    }""")
+
+    jsCheck = json.loads("""{
+        "uvs": [
+            [ 0.375, 0.325 ], [ 0.625, 0.325 ], [ 0.375, 0.450 ], [ 0.625, 0.450 ],
+            [ 0.375, 0.675 ], [ 0.625, 0.675 ], [ 0.375, 0.075 ], [ 0.625, 0.075 ],
+            [ 0.875, 0.325 ], [ 0.875, 0.450 ], [ 0.875, 0.675 ], [ 0.625, 0.925 ],
+            [ 0.375, 0.925 ], [ 0.125, 0.675 ], [ 0.125, 0.550 ], [ 0.125, 0.325 ],
+            [ 0.375, 0.550 ], [ 0.625, 0.550 ], [ 0.875, 0.550 ], [ 0.125, 0.450 ],
+            [ 0.375, 0.325 ], [ 0.625, 0.325 ], [ 0.375, 0.450 ], [ 0.625, 0.450 ],
+            [ 0.375, 0.675 ], [ 0.625, 0.675 ], [ 0.375, 0.075 ], [ 0.625, 0.075 ],
+            [ 0.875, 0.325 ], [ 0.875, 0.450 ], [ 0.875, 0.675 ], [ 0.625, 0.925 ],
+            [ 0.375, 0.925 ], [ 0.125, 0.675 ], [ 0.125, 0.550 ], [ 0.125, 0.325 ],
+            [ 0.375, 0.550 ], [ 0.625, 0.550 ], [ 0.875, 0.550 ], [ 0.125, 0.450 ],
+            [ 0.375, 0.025 ], [ 0.625, 0.025 ], [ 0.925, 0.325 ], [ 0.925, 0.450 ],
+            [ 0.925, 0.550 ], [ 0.925, 0.675 ], [ 0.625, 0.975 ], [ 0.375, 0.975 ],
+            [ 0.075, 0.675 ], [ 0.075, 0.550 ], [ 0.075, 0.450 ], [ 0.075, 0.325 ]
+        ],
+        "counts": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
+        "anim": [
+            [ -5.7071, 0.0, 5.7071], [ 5.7071, 0.0, 5.7071], [ -6.0, 0.0, 0.0 ],
+            [ 6.0, 0.0, 0.0 ], [ -5.7071, 0.0, -5.7071 ], [ 5.7071, 0.0, -5.7071 ],
+            [ -5.57735, 10.57735, 5.57735 ], [ 5.57735, 10.57735, 5.57735 ],
+            [ -5.7071, 10.7071, 0.0 ], [ 5.7071, 10.7071, 0.0 ],
+            [ -5.57735, 10.57735, -5.57735 ], [ 5.57735, 10.57735, -5.57735 ],
+            [ -5.0, 0.0, 5.0 ], [ 5.0, 0.0, 5.0 ], [ -5.0, 0.0, 0.0 ],
+            [ 5.0, 0.0, 0.0 ], [ -5.0, 0.0, -5.0 ], [ 5.0, 0.0, -5.0 ],
+            [ -5.0, 10.0, 5.0 ], [ 5.0, 10.0, 5.0 ], [ -5.0, 10.0, 0.0 ],
+            [ 5.0, 10.0, 0.0 ], [ -5.0, 10.0, -5.0 ], [ 5.0, 10.0, -5.0 ]
+        ],
+        "uvFaces": [
+            2,3,1,0,      4,5,17,16,    0,1,7,6,      1,3,9,8,
+            17,5,10,18,   5,4,12,11,    4,16,14,13,   2,0,15,19,
+            22,20,21,23,  24,36,37,25,  20,26,27,21,  21,28,29,23,
+            37,38,30,25,  25,31,32,24,  24,33,34,36,  22,39,35,20,
+            41,40,6,7,    43,42,8,9,    45,44,18,10,  47,46,11,12,
+            49,48,13,14,  51,50,19,15
+        ],
+        "faces": [
+            8,9,7,6,      10,11,9,8,    6,7,1,0,      7,9,3,1,
+            9,11,5,3,     11,10,4,5,    10,8,2,4,     8,6,0,2,
+            20,18,19,21,  22,20,21,23,  18,12,13,19,  19,13,15,21,
+            21,15,17,23,  23,17,16,22,  22,16,14,20,  20,14,12,18,
+            13,12,0,1,    15,13,1,3,    17,15,3,5,    16,17,5,4,
+            14,16,4,2,    12,14,2,0
+        ]
+    }""")
+
     inAnim = np.array(jsInput["anim"], dtype=float)
     inUvs = np.array(jsInput["uvs"], dtype=float)
     inCounts = np.array(jsInput["counts"], dtype=int)
@@ -748,3 +868,5 @@ if __name__ == "__main__":
 
 
 
+if __name__ == "__main__":
+    _test()
