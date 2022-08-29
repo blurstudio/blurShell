@@ -58,12 +58,12 @@ def triangulateFaces(counts, faces):
     fvIdxs = remap[smear] + repc.repeat(recounts)
     fvIdxs = fvIdxs.reshape((-1, 3))
     # Build the final triangle output
-    tris = faces[fvIdxs]
+    tris = faces[fvIdxs].flatten()
 
     # also get the face that each tri comes from
-    faceIdxs = np.repeat(np.arange(tris.size), counts - 2)
+    # faceIdxs = np.repeat(np.arange(counts.size), counts - 2)
 
-    return tris, fvIdxs, faceIdxs
+    return tris
 
 
 def buildNormals(anim, counts, faces, triangulate):
@@ -81,7 +81,7 @@ def buildNormals(anim, counts, faces, triangulate):
 
     if triangulate:
         faces = triangulateFaces(counts, faces)
-        counts = np.full((len(faces) // 3))
+        counts = np.full((len(faces) // 3), 3)
 
     # Get all adjacent vertex triples on the mesh
     nextStep = np.arange(len(faces)) + 1
@@ -175,9 +175,10 @@ def getEdgePairIdxs(counts, faces):
     # Start with all 1's
     idAry = np.ones(len(faces), dtype=int)
     # Get the indices of the last index of each face
-    ends = np.r_[0, counts[:-1].cumsum()]
+    # ends = np.r_[0, counts[:-1].cumsum()]
+    ends = counts.cumsum() - 1
     # Get how many steps back it is to the beginning of the face
-    idAry[ends] = -counts
+    idAry[ends] = -(counts - 1)
     # apply that offset to an arange to get the index of the next face-vert
 
     # Now add the step value to the index value of each spot in the array
@@ -257,7 +258,6 @@ def findSortedBorderEdges(counts, faces, faceVertIdxBorderPairs):
         np.array: Flat array of border vertices in order
         np.array: N*2 array of edge pairs
     """
-    faceVertIdxBorderPairs = findFaceVertBorderPairs(counts, faces)
     edges = faces[faceVertIdxBorderPairs]
     stopVals = np.setdiff1d(edges[:, 1], edges[:, 0], assume_unique=True)
     if stopVals.size == 0:
@@ -353,17 +353,14 @@ def shellUvTopo(faceVertIdxBorderPairs, oUvFaces, oUvCounts, numUVs, numBridgeSe
     return faces, counts
 
 
-def shellUvPos(uvs, bIdxs, prevIdxs, nxtIdxs, numBridgeSegs, offset):
+def shellUvPos(uvs, bIdxs, uvEdges, numBridgeSegs, offset):
     """Build the shell uv positions
 
     Arguments:
         uvs (np.array): N*2 array of uv positions
         bIdxs (np.array): Int array of the uv indices along the border
             that are being shelled
-        prevIdxs (np.array): Int array of the uv indices counter clockwise
-            from the bIdxs. If there is no vertex counterclockwise, then -1
-        nxtIdxs (np.array): Int array of the uv indices clockwise
-            from the bIdxs. If there is no vertex clockwise, then -1
+        uvEdges (np.array): N*2 array of paired uv indices that make edges
         numBridgeSegs (int): The number of segments on the bridge geo
         offset (float): How far to perpendicularly offset the edges
             in UV space
@@ -372,9 +369,24 @@ def shellUvPos(uvs, bIdxs, prevIdxs, nxtIdxs, numBridgeSegs, offset):
         np.array: N*2 array of uv positions with inner/outer shells
             and borders
     """
+
+
+
+    nxtFind = findInArray(bIdxs, uvEdges[:, 0])
+    nxt = uvEdges[nxtFind, 1]
+    nxt[nxtFind == -1] = -1
+
+    prevFind = findInArray(bIdxs, uvEdges[:, 1])
+    prev = uvEdges[prevFind, 0]
+    prev[prevFind == -1] = -1
+
+
+
+
+
     # Build the inner/outer layers, and reserve a chunk of memory
     # for the bridge points
-    bVertCount = numBridgeSegs * bIdxs.length()
+    bVertCount = numBridgeSegs * len(bIdxs)
     bUvs = np.zeros((bVertCount, 2))
     ret = np.concatenate((uvs, uvs, bUvs))  # TODO: Don't reverse the iFaces for UV's
 
@@ -467,7 +479,7 @@ def shellVertPos(rawAnim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffse
     """
     numFrames = len(rawAnim)
 
-    bVertCount = (numBridgeSegs - 1) * bIdxs.length()
+    bVertCount = (numBridgeSegs - 1) * len(bIdxs)
     bVerts = np.zeros((numFrames, bVertCount, 3))
     ret = np.concatenate(
         (
@@ -522,7 +534,7 @@ def shell(
         np.array: The new faces array
         np.array: The new uvFaces array
     """
-    padded = anim.ndims == 2
+    padded = anim.ndim == 2
     if padded:
         anim = anim[None, ...]
 
@@ -532,14 +544,15 @@ def shell(
     normals = buildNormals(anim, counts, faces, triangulate=True)
 
     faceVertIdxBorderPairs = findFaceVertBorderPairs(counts, faces)
+
     bIdxs, edges = findSortedBorderEdges(counts, faces, faceVertIdxBorderPairs)
-    prevIdxs = []  # TODO
-    nxtIdxs = []  # TODO
+    bUvIdxs, uvEdges = findSortedBorderEdges(counts, uvFaces, faceVertIdxBorderPairs)
 
     outUvFaces, outUvCounts = shellUvTopo(
         faceVertIdxBorderPairs, uvFaces, counts, len(uvs), numBridgeSegs
     )
-    outUvs = shellUvPos(uvs, bIdxs, prevIdxs, nxtIdxs, numBridgeSegs, uvOffset)
+    outUvs = shellUvPos(uvs, bUvIdxs, uvEdges, numBridgeSegs, uvOffset)
+
     outVertCounts, outVertFaces, _ = shellTopo(
         faceVertIdxBorderPairs, faces, counts, len(anim[1]), numBridgeSegs
     )
