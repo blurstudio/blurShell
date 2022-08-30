@@ -155,22 +155,32 @@ def reverseFaces(counts, faces):
     """
     # Build idAry to be "the number of steps left/right to get the next index"
     # So if everything was -1, that would mean "grab the previous item in the list"
-    # And that works for almost everything, except when we want the next face chunk
-    # Then we've gotta step from the beginning of one face, to the end of the next,
-    # That means we step the sum of the two adjacent faces (minus 1)
-    # Then we make sure to start at the final index of the first face
-    # Then just apply that rule to jumble the values of "faces" for the output
+    # And that works for almost everything, except when we jump around
+    # The fist jump is from the first item in the face to the last item in the face
+    # (which is a jump of one less than the faceCount ... ie. cm1)
+    # Then once we get to the final index of the current face (ie, the second index)
+    # we have to jump to the next face which is *also* one less than the current face
+    # count. So we just start at index 0, and apply those jumps
 
     # Start with all -1's
-    idAry = np.ones(len(faces), dtype=int) * -1
-    # Get the indices of the last index of each face
-    ends = np.r_[0, counts[:-1].cumsum()]
-    # Get the 2-face-step sizes
-    idAry[ends[1:]] = counts[1:] + counts[:-1] - 1
-    # Start at the last index of the first face
-    idAry[ends[0]] = counts[0] - 1
-    # Apply the rules for the output
-    return faces[idAry.cumsum()]
+    idAry = np.full(len(faces), -1, dtype=int)
+    # build the counts minus 1 array
+    cm1 = counts - 1
+    # Get the indices of the starts of each face
+    starts = np.r_[0, counts.cumsum()]
+    # Get the indices of the ends of each face
+    ends = starts - 1
+    # put the jumps to the start
+    idAry[starts[:-1]] = cm1
+    # put the jumps to the end
+    idAry[ends[1:]] = cm1
+    # evaluate the jumps
+    idxs = np.r_[0, idAry.cumsum()][:-1]
+    # and apply them
+    return faces[idxs]
+
+
+
 
 
 def getEdgePairIdxs(counts, faces):
@@ -198,12 +208,15 @@ def findInArray(needles, haystack):
     """ Find the indices of values in an array
 
     Arguments:
-        needles (np.array): The values to search for
-        haystack (np.array): The array to search in
+        needles (np.array): The values to search for. May have any shape
+        haystack (np.array): The array to search in. Must be 1d
 
     Returns:
         np.array: The index of needle in haystack, or -1 if not found
     """
+    nshape = needles.shape
+    needles = needles.flatten()
+
     contains = np.in1d(needles, haystack)
     defaults = np.full(needles.shape, -1)
     needles = needles[contains]
@@ -212,9 +225,7 @@ def findInArray(needles, haystack):
     ret = sorter[np.searchsorted(haystack, needles, sorter=sorter)]
 
     defaults[contains] = ret
-    return defaults
-
-
+    return defaults.reshape(nshape)
 # ---------------------------------------------------------------------
 
 
@@ -274,6 +285,61 @@ def findSortedBorderEdges(counts, faces, faceVertIdxBorderPairs):
     # I hope this is how 3dsMax does the order of these guys
     bVerts = np.insert(edges[:, 0], stopIdxs, edges[stopIdxs, 1])
     return bVerts, edges
+
+
+
+def buildBridges(bVerts, eVerts, edges, bridgeFirstIdx, numSegs):
+    """ Build the bridge faces
+
+    Arguments:
+        bVerts (np.array): The starting border vert indices
+        eVerts (np.array or None): The ending border vert indices.
+            It's possible to pass None to this if the end verts will
+            be floating. This will be for UVs
+        edges (np.array): The paired border edges in an N*2 array
+        bridgeFirstIdx (int): The first vert index of the bridge
+        numSegs (int): The number of segments connecting the inner
+            and outer shells
+
+    """
+    # Get the indices into the bVerts
+    edgeInsertIdxs = findInArray(edges, bVerts)
+    edgeInsertIdxs = np.flip(edgeInsertIdxs, axis=1)
+
+    # Build an array that I can think of like a vertIdx grid
+    # Then I can populate the reference Idxs into it
+    # -1 is an unfilled value
+    vIdxs = np.full((numSegs + 1, len(bVerts)), -1)
+    vIdxs[0] = bVerts
+    if eVerts is not None:
+        vIdxs[-1] = eVerts
+
+    ptr = bridgeFirstIdx
+    chunkShape = (numSegs + 1, 2)
+    # loop through the edges, and anywhere there's a -1
+    # fill it with new vertices
+    for inss in edgeInsertIdxs:
+        chunk = vIdxs[:, inss].flatten()
+        toFill = chunk == -1
+        fillCount = np.count_nonzero(toFill)
+        chunk[toFill] = np.arange(fillCount) + ptr
+        vIdxs[:, inss] = chunk.reshape(chunkShape)
+        ptr += fillCount
+
+    # now that I've got the grid, use the edgeInsertIdxs
+    # to grab the quads and return
+    ret = np.stack(
+        (
+            vIdxs[:, edgeInsertIdxs[:, 1]][1:],
+            vIdxs[:, edgeInsertIdxs[:, 0]][1:],
+            vIdxs[:, edgeInsertIdxs[:, 0]][:-1],
+            vIdxs[:, edgeInsertIdxs[:, 1]][:-1],
+        ),
+        axis=-1,
+    )
+
+    return ret.swapaxes(0, 1).flatten()
+
 
 
 def buildCycleBridges(
@@ -467,7 +533,8 @@ def shellUvPos(uvs, bIdxs, uvEdges, numBridgeSegs, offset):
 
 
 def shellTopo(faceVertIdxBorderPairs, oFaces, oCounts, vertCount, numBridgeSegs):
-    """
+    """ Build the vertex topology arrays for the shell
+
     Arguments:
         faceVertIdxBorderPairs (np.array): N*2 array of indices
             into the faces array that build border pairs. This
@@ -478,6 +545,11 @@ def shellTopo(faceVertIdxBorderPairs, oFaces, oCounts, vertCount, numBridgeSegs)
         vertCount (int): The number of verts
         numBridgeSegs (int): The number of segments that the bridge will have between
             the start and end. It has a minimum of 1
+
+    Returns:
+        np.array: The number of verts per face
+        np.array: The indices of each face
+        np.array: The ordered vertices on the borders
     """
     bVerts, edges = findSortedBorderEdges(oCounts, oFaces, faceVertIdxBorderPairs)
     cycle = findInArray(edges[:, 1], bVerts)
@@ -492,16 +564,16 @@ def shellTopo(faceVertIdxBorderPairs, oFaces, oCounts, vertCount, numBridgeSegs)
     bFaces = np.zeros((numBorders, numBridgeSegs, 4), dtype=int)
 
     # Build the bridge indices
-    bFaces[:, :, 0] = offset + oge + (numBorders * (ogs - 1))
-    bFaces[:, :, 1] = offset + cycle[oge] + (numBorders * (ogs - 1))
-    bFaces[:, :, 2] = offset + cycle[oge] + (numBorders * ogs)
-    bFaces[:, :, 3] = offset + oge + (numBorders * ogs)
+    bFaces[:, :, 3] = offset + oge + (numBorders * (ogs - 1))
+    bFaces[:, :, 2] = offset + cycle[oge] + (numBorders * (ogs - 1))
+    bFaces[:, :, 1] = offset + cycle[oge] + (numBorders * ogs)
+    bFaces[:, :, 0] = offset + oge + (numBorders * ogs)
 
     # Connect them back to the original meshes
-    bFaces[:, 0, 0] = bVerts[oge].flatten()
-    bFaces[:, 0, 1] = bVerts[cycle[oge]].flatten()
-    bFaces[:, -1, 2] = bVerts[cycle[oge]].flatten() + vertCount
-    bFaces[:, -1, 3] = bVerts[oge].flatten() + vertCount
+    bFaces[:, 0, 3] = bVerts[oge].flatten()
+    bFaces[:, 0, 2] = bVerts[cycle[oge]].flatten()
+    bFaces[:, -1, 1] = bVerts[cycle[oge]].flatten() + vertCount
+    bFaces[:, -1, 0] = bVerts[oge].flatten() + vertCount
 
     iFaces = reverseFaces(oCounts, oFaces) + vertCount
     faces = np.concatenate((oFaces, iFaces, bFaces.flatten()))
@@ -532,11 +604,12 @@ def shellVertPos(rawAnim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffse
             rawAnim + normals * outerOffset,
             rawAnim - normals * innerOffset,
             bVerts,
-        )
+        ),
+        axis=1,
     )
 
     innerVerts = ret[:, bIdxs]
-    outerVerts = ret[:, bIdxs + len(rawAnim)]
+    outerVerts = ret[:, bIdxs + rawAnim.shape[1]]
     for segIdx in range(1, numBridgeSegs):
         perc = float(segIdx) / numBridgeSegs
         ring = innerVerts * (1.0 - perc) + outerVerts * perc
@@ -766,6 +839,11 @@ def _test():
 
     # 1x1x2 box with missing bottom face
     jsInput = json.loads("""{
+        "anim": [
+            [-5.0,  0.0,  5.0], [5.0,  0.0,  5.0], [-5.0,  0.0,  0.0], [5.0,  0.0,  0.0],
+            [-5.0,  0.0, -5.0], [5.0,  0.0, -5.0], [-5.0, 10.0,  5.0], [5.0, 10.0,  5.0],
+            [-5.0, 10.0,  0.0], [5.0, 10.0,  0.0], [-5.0, 10.0, -5.0], [5.0, 10.0, -5.0]
+        ],
         "uvs": [
             [0.375, 0.325], [0.625, 0.325], [0.375, 0.450], [0.625, 0.450],
             [0.375, 0.675], [0.625, 0.675], [0.375, 0.075], [0.625, 0.075],
@@ -774,66 +852,167 @@ def _test():
             [0.375, 0.550], [0.625, 0.550], [0.875, 0.550], [0.125, 0.450]
         ],
         "counts": [4, 4, 4, 4, 4, 4, 4, 4],
-        "anim": [
-            [-5.0,  0.0,  5.0], [5.0,  0.0,  5.0], [-5.0,  0.0,  0.0], [5.0,  0.0,  0.0],
-            [-5.0,  0.0, -5.0], [5.0,  0.0, -5.0], [-5.0, 10.0,  5.0], [5.0, 10.0,  5.0],
-            [-5.0, 10.0,  0.0], [5.0, 10.0,  0.0], [-5.0, 10.0, -5.0], [5.0, 10.0, -5.0]
-        ],
-        "uvFaces": [
-            2,3,1,0,     4,5,17,16,  0,1,7,6,     1,3,9,8,
-            17,5,10,18,  5,4,12,11,  4,16,14,13,  2,0,15,19
-        ],
         "faces": [
             8,9,7,6,   10,11,9,8,  6,7,1,0,   7,9,3,1,
             9,11,5,3,  11,10,4,5,  10,8,2,4,  8,6,0,2
+        ],
+       "uvFaces": [
+            2,3,1,0,     4,5,17,16,  0,1,7,6,     1,3,9,8,
+            17,5,10,18,  5,4,12,11,  4,16,14,13,  2,0,15,19
         ]
     }""")
 
     jsCheck = json.loads("""{
-        "uvs": [
-            [ 0.375, 0.325 ], [ 0.625, 0.325 ], [ 0.375, 0.450 ], [ 0.625, 0.450 ],
-            [ 0.375, 0.675 ], [ 0.625, 0.675 ], [ 0.375, 0.075 ], [ 0.625, 0.075 ],
-            [ 0.875, 0.325 ], [ 0.875, 0.450 ], [ 0.875, 0.675 ], [ 0.625, 0.925 ],
-            [ 0.375, 0.925 ], [ 0.125, 0.675 ], [ 0.125, 0.550 ], [ 0.125, 0.325 ],
-            [ 0.375, 0.550 ], [ 0.625, 0.550 ], [ 0.875, 0.550 ], [ 0.125, 0.450 ],
-            [ 0.375, 0.325 ], [ 0.625, 0.325 ], [ 0.375, 0.450 ], [ 0.625, 0.450 ],
-            [ 0.375, 0.675 ], [ 0.625, 0.675 ], [ 0.375, 0.075 ], [ 0.625, 0.075 ],
-            [ 0.875, 0.325 ], [ 0.875, 0.450 ], [ 0.875, 0.675 ], [ 0.625, 0.925 ],
-            [ 0.375, 0.925 ], [ 0.125, 0.675 ], [ 0.125, 0.550 ], [ 0.125, 0.325 ],
-            [ 0.375, 0.550 ], [ 0.625, 0.550 ], [ 0.875, 0.550 ], [ 0.125, 0.450 ],
-            [ 0.375, 0.025 ], [ 0.625, 0.025 ], [ 0.925, 0.325 ], [ 0.925, 0.450 ],
-            [ 0.925, 0.550 ], [ 0.925, 0.675 ], [ 0.625, 0.975 ], [ 0.375, 0.975 ],
-            [ 0.075, 0.675 ], [ 0.075, 0.550 ], [ 0.075, 0.450 ], [ 0.075, 0.325 ]
-        ],
-        "counts": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
         "anim": [
-            [ -5.7071, 0.0, 5.7071], [ 5.7071, 0.0, 5.7071], [ -6.0, 0.0, 0.0 ],
-            [ 6.0, 0.0, 0.0 ], [ -5.7071, 0.0, -5.7071 ], [ 5.7071, 0.0, -5.7071 ],
-            [ -5.57735, 10.57735, 5.57735 ], [ 5.57735, 10.57735, 5.57735 ],
-            [ -5.7071, 10.7071, 0.0 ], [ 5.7071, 10.7071, 0.0 ],
-            [ -5.57735, 10.57735, -5.57735 ], [ 5.57735, 10.57735, -5.57735 ],
-            [ -5.0, 0.0, 5.0 ], [ 5.0, 0.0, 5.0 ], [ -5.0, 0.0, 0.0 ],
-            [ 5.0, 0.0, 0.0 ], [ -5.0, 0.0, -5.0 ], [ 5.0, 0.0, -5.0 ],
-            [ -5.0, 10.0, 5.0 ], [ 5.0, 10.0, 5.0 ], [ -5.0, 10.0, 0.0 ],
-            [ 5.0, 10.0, 0.0 ], [ -5.0, 10.0, -5.0 ], [ 5.0, 10.0, -5.0 ]
+            [-5.7071, 0.0, 5.7071], [5.7071, 0.0, 5.7071], [-6.0, 0.0, 0.0], [6.0, 0.0, 0.0],
+            [-5.7071, 0.0, -5.7071], [5.7071, 0.0, -5.7071], [-5.57735, 10.57735, 5.57735],
+            [5.57735, 10.57735, 5.57735], [-5.7071, 10.7071, 0.0], [5.7071, 10.7071, 0.0],
+            [-5.57735, 10.57735, -5.57735], [5.57735, 10.57735, -5.57735],
+            [-5.0, 0.0, 5.0], [5.0, 0.0, 5.0], [-5.0, 0.0, 0.0], [5.0, 0.0, 0.0],
+            [-5.0, 0.0, -5.0], [5.0, 0.0, -5.0], [-5.0, 10.0, 5.0], [5.0, 10.0, 5.0],
+            [-5.0, 10.0, 0.0], [5.0, 10.0, 0.0], [-5.0, 10.0, -5.0], [5.0, 10.0, -5.0],
+            [5.47140, 0.0, 5.47140], [5.6666, 0.0, 0.0], [5.47140, 0.0, -5.47140],
+            [-5.47140, 0.0, -5.47140], [-5.6666, 0.0, 0.0], [-5.47140, 0.0, 5.47140],
+            [5.23570, 0.0, 5.23570], [5.3333, 0.0, 0.0], [5.23570, 0.0, -5.23570],
+            [-5.23570, 0.0, -5.23570], [-5.3333, 0.0, 0.0], [-5.23570, 0.0, 5.23570]
         ],
-        "uvFaces": [
-            2,3,1,0,      4,5,17,16,    0,1,7,6,      1,3,9,8,
-            17,5,10,18,   5,4,12,11,    4,16,14,13,   2,0,15,19,
-            22,20,21,23,  24,36,37,25,  20,26,27,21,  21,28,29,23,
-            37,38,30,25,  25,31,32,24,  24,33,34,36,  22,39,35,20,
-            41,40,6,7,    43,42,8,9,    45,44,18,10,  47,46,11,12,
-            49,48,13,14,  51,50,19,15
+        "uvs": [
+            [0.375, 0.325], [0.625, 0.325], [0.375, 0.450], [0.625, 0.450],
+            [0.375, 0.675], [0.625, 0.675], [0.375, 0.075], [0.625, 0.075],
+            [0.875, 0.325], [0.875, 0.450], [0.875, 0.675], [0.625, 0.925],
+            [0.375, 0.925], [0.125, 0.675], [0.125, 0.550], [0.125, 0.325],
+            [0.375, 0.550], [0.625, 0.550], [0.875, 0.550], [0.125, 0.450],
+            [0.375, 0.325], [0.625, 0.325], [0.375, 0.450], [0.625, 0.450],
+            [0.375, 0.675], [0.625, 0.675], [0.375, 0.075], [0.625, 0.075],
+            [0.875, 0.325], [0.875, 0.450], [0.875, 0.675], [0.625, 0.925],
+            [0.375, 0.925], [0.125, 0.675], [0.125, 0.550], [0.125, 0.325],
+            [0.375, 0.550], [0.625, 0.550], [0.875, 0.550], [0.125, 0.450],
+            [0.375, 0.0583333], [0.625, 0.0583333], [0.375, 0.0416666], [0.625, 0.0416666],
+            [0.375, 0.025], [0.625, 0.025], [0.8916666, 0.325], [0.8916666, 0.450],
+            [0.9083333, 0.325], [0.9083333, 0.450], [0.925, 0.325], [0.925, 0.450],
+            [0.8916666, 0.550], [0.8916666, 0.675], [0.9083333, 0.550], [0.9083333, 0.675],
+            [0.925, 0.550], [0.925, 0.675], [0.625, 0.9416666], [0.375, 0.9416666],
+            [0.625, 0.9583333], [0.375, 0.9583333], [0.625, 0.975], [0.375, 0.975],
+            [0.1083333, 0.675], [0.1083333, 0.550], [0.0916666, 0.675], [0.0916666, 0.550],
+            [0.075, 0.675], [0.075, 0.550], [0.1083333, 0.450], [0.1083333, 0.325],
+            [0.0916666, 0.450], [0.0916666, 0.325], [0.075, 0.450], [0.075, 0.325]
+        ],
+        "counts": [
+            4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4
         ],
         "faces": [
             8,9,7,6,      10,11,9,8,    6,7,1,0,      7,9,3,1,
             9,11,5,3,     11,10,4,5,    10,8,2,4,     8,6,0,2,
             20,18,19,21,  22,20,21,23,  18,12,13,19,  19,13,15,21,
             21,15,17,23,  23,17,16,22,  22,16,14,20,  20,14,12,18,
-            13,12,0,1,    15,13,1,3,    17,15,3,5,    16,17,5,4,
-            14,16,4,2,    12,14,2,0
+            24,29,0,1,    30,35,29,24,  13,12,35,30,  25,24,1,3,
+            31,30,24,25,  15,13,30,31,  26,25,3,5,    32,31,25,26,
+            17,15,31,32,  27,26,5,4,    33,32,26,27,  16,17,32,33,
+            28,27,4,2,    34,33,27,28,  14,16,33,34,  29,28,2,0,
+            35,34,28,29,  12,14,34,35
+        ],
+        "uvFaces": [
+            2,3,1,0,      4,5,17,16,    0,1,7,6,      1,3,9,8,
+            17,5,10,18,   5,4,12,11,    4,16,14,13,   2,0,15,19,
+            22,20,21,23,  24,36,37,25,  20,26,27,21,  21,28,29,23,
+            37,38,30,25,  25,31,32,24,  24,33,34,36,  22,39,35,20,
+            41,40,6,7,    43,42,40,41,  45,44,42,43,  47,46,8,9,
+            49,48,46,47,  51,50,48,49,  53,52,18,10,  55,54,52,53,
+            57,56,54,55,  59,58,11,12,  61,60,58,59,  63,62,60,61,
+            65,64,13,14,  67,66,64,65,  69,68,66,67,  71,70,19,15,
+            73,72,70,71,  75,74,72,73
         ]
     }""")
+
+
+    jsInput = json.loads("""{
+        "anim": [
+            [-5.0, 0.0, 5.0], [5.0, 0.0, 5.0], [-5.0, 0.0, 0.0], [5.0, 0.0, 0.0],
+            [-5.0, 0.0, -5.0], [5.0, 0.0, -5.0], [-5.0, 10.0, 5.0], [5.0, 10.0, 5.0],
+            [-5.0, 10.0, 0.0], [5.0, 10.0, 0.0], [-5.0, 10.0, -5.0], [5.0, 10.0, -5.0]
+        ],
+        "uvs": [
+            [0.375, 0.375], [0.625, 0.375], [0.375, 0.5], [0.625, 0.5],
+            [0.375, 0.625], [0.625, 0.625], [0.375, 0.125], [0.625, 0.125],
+            [0.875, 0.375], [0.875, 0.5], [0.875, 0.625], [0.625, 0.875],
+            [0.375, 0.875], [0.125, 0.625], [0.125, 0.5], [0.125, 0.375]
+        ],
+        "counts": [4, 4, 4, 4, 4, 4, 4, 4],
+        "faces": [
+            8,9,7,6,  10,11,9,8, 6,7,1,0,  7,9,3,1,
+            9,11,5,3, 11,10,4,5, 10,8,2,4, 8,6,0,2
+        ],
+        "uvFaces": [
+            2,3,1,0,  4,5,3,2,   0,1,7,6,   1,3,9,8,
+            3,5,10,9, 5,4,12,11, 4,2,14,13, 2,0,15,14
+        ]
+    }""")
+
+
+
+    jsCheck = json.loads("""{
+        "anim": [
+            [-5.7071, 0.0, 5.7071], [5.7071, 0.0, 5.7071], [-6.0, 0.0, 0.0], [6.0, 0.0, 0.0],
+            [-5.7071, 0.0, -5.7071], [5.7071, 0.0, -5.7071], [-5.57735, 10.57735, 5.57735],
+            [5.57735, 10.57735, 5.57735], [-5.7071, 10.7071, 0.0], [5.7071, 10.7071, 0.0],
+            [-5.57735, 10.57735, -5.57735], [5.57735, 10.57735, -5.57735],
+            [-5.0, 0.0, 5.0], [5.0, 0.0, 5.0], [-5.0, 0.0, 0.0], [5.0, 0.0, 0.0],
+            [-5.0, 0.0, -5.0], [5.0, 0.0, -5.0], [-5.0, 10.0, 5.0], [5.0, 10.0, 5.0],
+            [-5.0, 10.0, 0.0], [5.0, 10.0, 0.0], [-5.0, 10.0, -5.0], [5.0, 10.0, -5.0],
+            [5.4714, 0.0, 5.4714], [5.6666, 0.0, 0.0], [5.4714, 0.0, -5.4714], [-5.4714, 0.0, -5.4714],
+            [-5.6666, 0.0, 0.0], [-5.4714, 0.0, 5.4714], [5.2357, 0.0, 5.2357], [5.3333, 0.0, 0.0],
+            [5.2357, 0.0, -5.2357], [-5.2357, 0.0, -5.2357], [-5.3333, 0.0, 0.0], [-5.2357, 0.0, 5.2357]
+        ],
+        "uvs": [
+            [0.375, 0.375], [0.625, 0.375], [0.375, 0.5], [0.625, 0.5],
+            [0.375, 0.625], [0.625, 0.625], [0.375, 0.125], [0.625, 0.125],
+            [0.875, 0.375], [0.875, 0.5], [0.875, 0.625], [0.625, 0.875],
+            [0.375, 0.875], [0.125, 0.625], [0.125, 0.5], [0.125, 0.375],
+            [0.375, 0.375], [0.625, 0.375], [0.375, 0.5], [0.625, 0.5],
+            [0.375, 0.625], [0.625, 0.625], [0.375, 0.125], [0.625, 0.125],
+            [0.875, 0.375], [0.875, 0.5], [0.875, 0.625], [0.625, 0.875],
+            [0.375, 0.875], [0.125, 0.625], [0.125, 0.5], [0.125, 0.375],
+            [0.375, 0.1083333], [0.625, 0.1083333], [0.375, 0.0916666], [0.625, 0.0916666],
+            [0.375, 0.075], [0.625, 0.075], [0.8916666, 0.375], [0.8916666, 0.5],
+            [0.9083333, 0.375], [0.9083333, 0.5], [0.925, 0.375], [0.925, 0.5],
+            [0.8916666, 0.625], [0.9083333, 0.625], [0.925, 0.625], [0.625, 0.8916666],
+            [0.375, 0.8916666], [0.625, 0.9083333], [0.375, 0.9083333], [0.625, 0.925],
+            [0.375, 0.925], [0.1083333, 0.625], [0.1083333, 0.5], [0.0916666, 0.625],
+            [0.0916666, 0.5], [0.075, 0.625], [0.075, 0.5], [0.1083333, 0.375],
+            [0.0916666, 0.375], [0.075, 0.375]
+        ],
+        "counts": [4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],
+        "faces": [
+            8,9,7,6,      10,11,9,8,    6,7,1,0,      7,9,3,1,
+            9,11,5,3,     11,10,4,5,    10,8,2,4,     8,6,0,2,
+            20,18,19,21,  22,20,21,23,  18,12,13,19,  19,13,15,21,
+            21,15,17,23,  23,17,16,22,  22,16,14,20,  20,14,12,18,
+            24,29,0,1,    30,35,29,24,  13,12,35,30,
+            25,24,1,3,    31,30,24,25,  15,13,30,31,
+            26,25,3,5,    32,31,25,26,  17,15,31,32,
+            27,26,5,4,    33,32,26,27,  16,17,32,33,
+            28,27,4,2,    34,33,27,28,  14,16,33,34,
+            29,28,2,0,    35,34,28,29,  12,14,34,35
+        ],
+        "uvFaces": [
+            2,3,1,0,      4,5,3,2,      0,1,7,6,      1,3,9,8,
+            3,5,10,9,     5,4,12,11,    4,2,14,13,    2,0,15,14,
+            18,16,17,19,  20,18,19,21,  16,22,23,17,  17,24,25,19,
+            19,25,26,21,  21,27,28,20,  20,29,30,18,  18,30,31,16,
+            33,32,6,7,    35,34,32,33,  37,36,34,35,
+            39,38,8,9,    41,40,38,39,  43,42,40,41,
+            44,39,9,10,   45,41,39,44,  46,43,41,45,
+            48,47,11,12,  50,49,47,48,  52,51,49,50,
+            54,53,13,14,  56,55,53,54,  58,57,55,56,
+            59,54,14,15,  60,56,54,59,  61,58,56,60
+        ]
+    }""")
+
+
+
+
+
+
 
     inAnim = np.array(jsInput["anim"], dtype=float)
     inUvs = np.array(jsInput["uvs"], dtype=float)
@@ -847,12 +1026,10 @@ def _test():
     chkFaces = np.array(jsCheck["faces"], dtype=int)
     chkUvFaces = np.array(jsCheck["uvFaces"], dtype=int)
 
-
     innerOffset = 0.0
-    outerOffset = 0.1
+    outerOffset = 1.0
     uvOffset = 0.05
     numBridgeSegs = 3
-
 
     outAnim, outUvs, outCounts, outFaces, outUvFaces = shell(
         inAnim,
@@ -866,6 +1043,17 @@ def _test():
         numBridgeSegs,
     )
 
+    closeAnim = np.all(np.isclose(outAnim, chkAnim))
+    closeUvs = np.all(np.isclose(outUvs, chkUvs))
+    closeCounts = np.all(np.isclose(outCounts, chkCounts))
+    closeFaces = np.all(np.isclose(outFaces, chkFaces))
+    closeUvFaces = np.all(np.isclose(outUvFaces, chkUvFaces))
+
+    assert closeAnim
+    assert closeUvs
+    assert closeCounts
+    assert closeFaces
+    assert closeUvFaces
 
 
 if __name__ == "__main__":
