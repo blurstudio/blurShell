@@ -180,9 +180,6 @@ def reverseFaces(counts, faces):
     return faces[idxs]
 
 
-
-
-
 def getEdgePairIdxs(counts, faces):
     """Build a 2*N array of ordered edge pairs"""
     # We're going to build a list of how many steps to take to get
@@ -287,8 +284,7 @@ def findSortedBorderEdges(counts, faces, faceVertIdxBorderPairs):
     return bVerts, edges
 
 
-
-def buildBridges(bVerts, eVerts, edges, bridgeFirstIdx, numSegs):
+def buildBridgesByEdge(bVerts, edges, bridgeFirstIdx, numSegs):
     """ Build the bridge faces
 
     Arguments:
@@ -301,6 +297,9 @@ def buildBridges(bVerts, eVerts, edges, bridgeFirstIdx, numSegs):
         numSegs (int): The number of segments connecting the inner
             and outer shells
 
+    Returns:
+        np.array: The flat array of new faces
+        np.array: The flat array of new counts per face
     """
     # Get the indices into the bVerts
     edgeInsertIdxs = findInArray(edges, bVerts)
@@ -309,92 +308,82 @@ def buildBridges(bVerts, eVerts, edges, bridgeFirstIdx, numSegs):
     # Build an array that I can think of like a vertIdx grid
     # Then I can populate the reference Idxs into it
     # -1 is an unfilled value
-    vIdxs = np.full((numSegs + 1, len(bVerts)), -1)
-    vIdxs[0] = bVerts
-    if eVerts is not None:
-        vIdxs[-1] = eVerts
+    grid = np.full((numSegs + 1, len(bVerts)), -1)
+    grid[0] = bVerts
 
     ptr = bridgeFirstIdx
     chunkShape = (numSegs + 1, 2)
     # loop through the edges, and anywhere there's a -1
     # fill it with new vertices
     for inss in edgeInsertIdxs:
-        chunk = vIdxs[:, inss].flatten()
+        chunk = grid[:, inss].flatten()
         toFill = chunk == -1
         fillCount = np.count_nonzero(toFill)
         chunk[toFill] = np.arange(fillCount) + ptr
-        vIdxs[:, inss] = chunk.reshape(chunkShape)
+        grid[:, inss] = chunk.reshape(chunkShape)
         ptr += fillCount
 
     # now that I've got the grid, use the edgeInsertIdxs
     # to grab the quads and return
-    ret = np.stack(
+    faces = np.stack(
         (
-            vIdxs[:, edgeInsertIdxs[:, 1]][1:],
-            vIdxs[:, edgeInsertIdxs[:, 0]][1:],
-            vIdxs[:, edgeInsertIdxs[:, 0]][:-1],
-            vIdxs[:, edgeInsertIdxs[:, 1]][:-1],
+            grid[:, edgeInsertIdxs[:, 1]][1:],
+            grid[:, edgeInsertIdxs[:, 0]][1:],
+            grid[:, edgeInsertIdxs[:, 0]][:-1],
+            grid[:, edgeInsertIdxs[:, 1]][:-1],
         ),
         axis=-1,
     )
 
-    return ret.swapaxes(0, 1).flatten()
+    faces = faces.swapaxes(0, 1).flatten()
+    counts = np.full((len(edges) * numSegs), 4)
+    return faces, counts, grid
 
 
-
-def buildCycleBridges(
-    startBorderVerts, endBorderVerts, cycle, bridgeFirstIdx, numBridgeSegs
-):
-    """Build a bridge between a starting set of edges, and an ending set of edges
-    We assume that the starting/ending edge sets have the same order
-    We also assume that there are no edges along the border that don't form full
-    cycles
-    This can be used for both Verts and UVs
+def buildBridgesByVert(bVerts, eVerts, edges, bridgeFirstIdx, numSegs):
+    """ Build the bridge faces
 
     Arguments:
-        startBorderVerts (np.array): A Flat array of vertex indices that define
-            border edges for the starting loop
-        endBorderVerts (np.array): A Flat array of vertex indices that define
-            border edges for the ending loop
-        cycle (np.array): An array that defines the index of the vertex that's
-            the clockwise neighbor of the given index
-        bridgeFirstIdx (int): Where to start counting for newly created bridge indices
-        numBridgeSegs (int): The number of segments that the bridge will have between
-            the start and end. It has a minimum of 1
+        bVerts (np.array): The starting border vert indices
+        eVerts (np.array or None): The ending border vert indices.
+            It's possible to pass None to this if the end verts will
+            be floating. This will be for UVs
+        edges (np.array): The paired border edges in an N*2 array
+        bridgeFirstIdx (int): The first vert index of the bridge
+        numSegs (int): The number of segments connecting the inner
+            and outer shells
 
     Returns:
-        np.array: The Face array that was created. This should extend the existing
-            face array for whatever mesh you're working on
-        np.array: The Count array that was created. This should extend the existing
-            count array for whatever mesh you're working on
+        np.array: The flat array of new faces
+        np.array: The flat array of new counts per face
     """
-    numBorders = len(cycle)
 
-    oge, ogs = np.ogrid[:numBorders, :numBridgeSegs]
-    bFaces = np.zeros((numBorders, numBridgeSegs, 4), dtype=int)
 
-    # Build the raw bridge indices
-    # For simplicity of code, I don't special-case the parts where
-    # I'm going to connect back to the original meshes
-    bFaces[:, :, 0] = oge + (numBorders * (ogs - 1))
-    bFaces[:, :, 1] = cycle[oge] + (numBorders * (ogs - 1))
-    bFaces[:, :, 2] = cycle[oge] + (numBorders * ogs)
-    bFaces[:, :, 3] = oge + (numBorders * ogs)
+    grid = np.full((numSegs + 1, len(bVerts)), -1)
+    grid[0] = bVerts
+    grid[-1] = eVerts
+    for i in range(1, numSegs):
+        grid[i] = np.arange(len(bVerts)) + bridgeFirstIdx + ((i - 1) * len(bVerts))
 
-    # Offset these indices
-    bFaces += bridgeFirstIdx
+    # Get the indices into the bVerts
+    edgeInsertIdxs = findInArray(edges, bVerts)
+    edgeInsertIdxs = np.flip(edgeInsertIdxs, axis=1)
 
-    # Connect them back to the original meshes
-    bFaces[:, 0, 0] = startBorderVerts[oge].flatten()
-    bFaces[:, 0, 1] = startBorderVerts[cycle[oge]].flatten()
-    bFaces[:, -1, 2] = endBorderVerts[cycle[oge]].flatten()
-    bFaces[:, -1, 3] = endBorderVerts[oge].flatten()
-    bFaces = bFaces.flatten()
+    # now that I've got the grid, use the edgeInsertIdxs
+    # to grab the quads and return
+    faces = np.stack(
+        (
+            grid[:, edgeInsertIdxs[:, 1]][1:],
+            grid[:, edgeInsertIdxs[:, 0]][1:],
+            grid[:, edgeInsertIdxs[:, 0]][:-1],
+            grid[:, edgeInsertIdxs[:, 1]][:-1],
+        ),
+        axis=-1,
+    )
 
-    # Counts is just a bunch of 4's
-    bCounts = np.full((numBorders * numBridgeSegs), 4)
-
-    return bFaces, bCounts
+    faces = faces.swapaxes(0, 1).flatten()
+    counts = np.full((len(edges) * numSegs), 4)
+    return faces, counts, grid
 
 
 def shellUvTopo(faceVertIdxBorderPairs, oUvFaces, oUvCounts, numUVs, numBridgeSegs):
@@ -411,125 +400,15 @@ def shellUvTopo(faceVertIdxBorderPairs, oUvFaces, oUvCounts, numUVs, numBridgeSe
             the start and end. It has a minimum of 1
     """
     bVerts, edges = findSortedBorderEdges(oUvCounts, oUvFaces, faceVertIdxBorderPairs)
-    cycle = findInArray(edges[:, 1], bVerts)
-
-
-    nxtFind = findInArray(bVerts, edges[:, 0])
-    nxt = edges[nxtFind, 1]
-    nxt[nxtFind == -1] = -1
-
-    prevFind = findInArray(bVerts, edges[:, 1])
-    prev = edges[prevFind, 0]
-    prev[prevFind == -1] = -1
-
-
-
-
-
-
 
     bridgeFirstIdx = numUVs * 2
-
-    eVerts = bVerts + bridgeFirstIdx + (len(bVerts) * numBridgeSegs)
-
-
-    bFaces, bCounts = buildCycleBridges(
-        bVerts, eVerts, cycle, bridgeFirstIdx, numBridgeSegs
-    )
+    bFaces, bCounts, grid = buildBridgesByEdge(bVerts, edges, bridgeFirstIdx, numBridgeSegs)
 
     iUvFaces = reverseFaces(oUvCounts, oUvFaces) + numUVs
     faces = np.concatenate((oUvFaces, iUvFaces, bFaces))
     counts = np.concatenate((oUvCounts, oUvCounts, bCounts), axis=0)
 
-    return faces, counts
-
-
-def shellUvPos(uvs, bIdxs, uvEdges, numBridgeSegs, offset):
-    """Build the shell uv positions
-
-    Arguments:
-        uvs (np.array): N*2 array of uv positions
-        bIdxs (np.array): Int array of the uv indices along the border
-            that are being shelled
-        uvEdges (np.array): N*2 array of paired uv indices that make edges
-        numBridgeSegs (int): The number of segments on the bridge geo
-        offset (float): How far to perpendicularly offset the edges
-            in UV space
-
-    Returns:
-        np.array: N*2 array of uv positions with inner/outer shells
-            and borders
-    """
-
-    nxtFind = findInArray(bIdxs, uvEdges[:, 0])
-    nxtIdxs = uvEdges[nxtFind, 1]
-    nxtIdxs[nxtFind == -1] = -1
-    noNxts = nxtIdxs == -1
-
-    prevFind = findInArray(bIdxs, uvEdges[:, 1])
-    prevIdxs = uvEdges[prevFind, 0]
-    prevIdxs[prevFind == -1] = -1
-    noPrevs = prevIdxs == -1
-
-    # Build the inner/outer layers, and reserve a chunk of memory
-    # for the bridge points
-    bVertCount = numBridgeSegs * len(bIdxs)
-    bUvs = np.zeros((bVertCount, 2))
-    ret = np.concatenate((uvs, uvs, bUvs))
-
-
-
-    # Figure out the outer vert positions, and set them in the reserved space
-    prevVecs = uvs[prevIdxs] - uvs[bIdxs]
-    nxtVecs = uvs[nxtIdxs] - uvs[bIdxs]
-
-    pvw = prevVecs == 0
-    pvw = pvw[:, 0] & pvw[:, 1]
-    prevVecs[pvw, 0] = 1.0
-
-    nvw = nxtVecs == 0
-    nvw = nvw[:, 0] & nvw[:, 1]
-    nxtVecs[nvw, 0] = 1.0
-
-    prevVecs = _norm(prevVecs)
-    nxtVecs = _norm(nxtVecs)
-
-    halfAngles = np.arctan2(_lens(prevVecs + nxtVecs), _lens(prevVecs - nxtVecs))
-
-    cosAngles = np.cos(halfAngles)
-    sinAngles = np.sin(halfAngles)
-
-    rotMat = np.empty((len(nxtVecs), 2, 2))
-    rotMat[:, 0, 0] = cosAngles
-    rotMat[:, 0, 1] = sinAngles
-    rotMat[:, 1, 1] = cosAngles
-    rotMat[:, 1, 0] = -sinAngles
-
-    r90 = np.array([[[0, 1], [-1, 0]]])
-    rotMat[noPrevs] = r90
-    rotMat[noNxts] = -r90
-
-    rotVecs = np.einsum('ij, ijk -> ik', nxtVecs, rotMat)
-
-    scales = offset * 2 / np.cos(halfAngles)
-    scales[scales > 20] = 20.0  # set a max value
-    rotVecs *= scales[..., None]
-    outerVerts = rotVecs + uvs[bIdxs]
-    ret[-len(outerVerts) :] = outerVerts
-
-
-
-    # The inner vert positions are easy
-    innerVerts = ret[bIdxs]
-
-    # Interpolate between them
-    for segIdx in range(1, numBridgeSegs):
-        perc = float(segIdx) / numBridgeSegs
-        ring = innerVerts * (1.0 - perc) + outerVerts * perc
-        ringIdxs = bIdxs + ((2 * len(uvs)) + (len(bIdxs) * (segIdx - 1)))
-        ret[ringIdxs] = ring
-
-    return ret
+    return faces, counts, grid, edges, bVerts
 
 
 def shellTopo(faceVertIdxBorderPairs, oFaces, oCounts, vertCount, numBridgeSegs):
@@ -552,36 +431,126 @@ def shellTopo(faceVertIdxBorderPairs, oFaces, oCounts, vertCount, numBridgeSegs)
         np.array: The ordered vertices on the borders
     """
     bVerts, edges = findSortedBorderEdges(oCounts, oFaces, faceVertIdxBorderPairs)
-    cycle = findInArray(edges[:, 1], bVerts)
 
-    brEdges = np.full(numBridgeSegs * len(bVerts), 4, dtype=int)
-    counts = np.concatenate((oCounts, oCounts, brEdges), axis=0)
+    eVerts = bVerts + vertCount
+    bridgeFirstIdx = 2 * vertCount
 
-    numBorders = len(bVerts)
-    offset = 2 * vertCount
-
-    oge, ogs = np.ogrid[:numBorders, :numBridgeSegs]
-    bFaces = np.zeros((numBorders, numBridgeSegs, 4), dtype=int)
-
-    # Build the bridge indices
-    bFaces[:, :, 3] = offset + oge + (numBorders * (ogs - 1))
-    bFaces[:, :, 2] = offset + cycle[oge] + (numBorders * (ogs - 1))
-    bFaces[:, :, 1] = offset + cycle[oge] + (numBorders * ogs)
-    bFaces[:, :, 0] = offset + oge + (numBorders * ogs)
-
-    # Connect them back to the original meshes
-    bFaces[:, 0, 3] = bVerts[oge].flatten()
-    bFaces[:, 0, 2] = bVerts[cycle[oge]].flatten()
-    bFaces[:, -1, 1] = bVerts[cycle[oge]].flatten() + vertCount
-    bFaces[:, -1, 0] = bVerts[oge].flatten() + vertCount
+    bFaces, bCounts, grid = buildBridgesByVert(bVerts, eVerts, edges, bridgeFirstIdx, numBridgeSegs)
 
     iFaces = reverseFaces(oCounts, oFaces) + vertCount
-    faces = np.concatenate((oFaces, iFaces, bFaces.flatten()))
+    faces = np.concatenate((oFaces, iFaces, bFaces))
+    counts = np.concatenate((oCounts, oCounts, bCounts), axis=0)
 
-    return counts, faces, bVerts
+    return counts, faces, grid, bVerts
 
 
-def shellVertPos(rawAnim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffset):
+def _getOffsettedUvs(uvs, grid, edges, offset):
+    # The given edges are at the outside of the current shells
+    # Flip 'em so they're at the inside of the new bridge
+    edges = np.flip(edges, axis=1)
+    bVerts = grid[0]
+
+    nxtFind = findInArray(bVerts, edges[:, 0])
+    nxtIdxs = edges[nxtFind, 1]
+    nxtIdxs[nxtFind == -1] = -1
+    noNxts = nxtIdxs == -1
+
+    prevFind = findInArray(bVerts, edges[:, 1])
+    prevIdxs = edges[prevFind, 0]
+    prevIdxs[prevFind == -1] = -1
+    noPrevs = prevIdxs == -1
+
+
+    midPts = ~noPrevs & ~noNxts
+
+
+    # Figure out the outer vert positions, and set them in the reserved space
+    prevVecs = uvs[prevIdxs] - uvs[bVerts]
+    nxtVecs = uvs[nxtIdxs] - uvs[bVerts]
+
+    # The only way I get zero length vecs is if I'm using the same idx
+    # twice (via -1), so I can just ignore that part, and use the noPrevs/noNxts
+
+    prevVecs = _norm(prevVecs)
+    nxtVecs = _norm(nxtVecs)
+
+
+    mPrevs = prevVecs[midPts]
+    mNxts = nxtVecs[midPts]
+
+
+
+    halfAngles = np.arctan2(_lens(mPrevs - mNxts), _lens(mPrevs + mNxts))
+
+
+
+
+
+
+    cosAngles = np.cos(halfAngles)
+    sinAngles = np.sin(halfAngles)
+    # Just for viewing:
+    cosAngles[np.abs(cosAngles) < 1.0e-6] = 0
+    sinAngles[np.abs(sinAngles) < 1.0e-6] = 0
+
+    rotMat = np.full((len(nxtVecs), 2, 2), np.nan)
+    rotMat[midPts, 0, 0] = cosAngles
+    rotMat[midPts, 0, 1] = -sinAngles
+    rotMat[midPts, 1, 1] = cosAngles
+    rotMat[midPts, 1, 0] = sinAngles
+
+    r90 = np.array([[[0, -1], [1, 0]]])
+    rotMat[noPrevs] = r90
+    rotMat[noNxts] = -r90
+
+
+    toRot = nxtVecs
+    toRot[noNxts] = prevVecs[noNxts]
+    rotVecs = np.einsum('ij, ijk -> ik', toRot, rotMat)
+
+
+    scales = np.full(len(rotVecs), offset)
+    scales[midPts] = offset * 2 / (1 - np.cos(halfAngles * 2))
+    scales[scales > 20] = 20.0  # set a max value
+
+    rotVecs *= scales[..., None]
+    outerVerts = rotVecs + uvs[bVerts]
+
+    return outerVerts
+
+
+def shellUvGridPos(uvs, grid, edges, offset):
+    """Build the shell uv positions
+
+    Arguments:
+        uvs (np.array): N*2 array of uv positions
+        grid (np.array): The grid of border and bridge uv idxs
+        edges (np.array): N*2 array of paired uv indices around the border
+        offset (float): The amount to offset the border edges in UV space
+    Returns:
+        np.array: N*2 array of uv positions with inner/outer shells
+            and borders
+    """
+    bVerts = grid[0]
+    eVerts = grid[-1]
+    numBridgeSegs = grid.shape[0] - 1
+
+    # Build the inner/outer layers, and reserve a chunk of memory
+    # for the bridge points
+    bUvs = np.zeros((numBridgeSegs * len(bVerts), 2), dtype=float)
+    ret = np.concatenate((uvs, uvs, bUvs))
+
+    innerVerts = uvs[bVerts]
+    outerVerts = _getOffsettedUvs(uvs, grid, edges, offset)
+    ret[eVerts] = outerVerts
+    for segIdx in range(1, numBridgeSegs):
+        perc = float(segIdx) / (len(grid) - 1)
+        ret[grid[segIdx]] = innerVerts * (1.0 - perc) + outerVerts * perc
+
+    return ret
+
+
+def shellVertGridPos(rawAnim, normals, grid, innerOffset, outerOffset):
     """ Build the vertex positions for the shell
 
     Arguments:
@@ -595,26 +564,28 @@ def shellVertPos(rawAnim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffse
     Returns:
         np.array: F*N*3 array of new point positions
     """
-    numFrames = len(rawAnim)
+    bVerts = grid[0]
+    eVerts = grid[-1]
+    numBridgeSegs = grid.shape[0] - 1
 
-    bVertCount = (numBridgeSegs - 1) * len(bIdxs)
-    bVerts = np.zeros((numFrames, bVertCount, 3))
+    # Build the inner/outer layers, and reserve a chunk of memory
+    # for the bridge points
+    bVertCount = (numBridgeSegs - 1) * len(bVerts)
+    bVals = np.zeros((len(rawAnim), bVertCount, 3), dtype=float)
     ret = np.concatenate(
         (
-            rawAnim + normals * outerOffset,
-            rawAnim - normals * innerOffset,
-            bVerts,
+            rawAnim - normals * outerOffset,
+            rawAnim + normals * innerOffset,
+            bVals,
         ),
         axis=1,
     )
 
-    innerVerts = ret[:, bIdxs]
-    outerVerts = ret[:, bIdxs + rawAnim.shape[1]]
+    innerVerts = ret[:, bVerts]
+    outerVerts = ret[:, eVerts]
     for segIdx in range(1, numBridgeSegs):
         perc = float(segIdx) / numBridgeSegs
-        ring = innerVerts * (1.0 - perc) + outerVerts * perc
-        ringIdxs = bIdxs + ((2 * len(rawAnim)) + (len(bIdxs) * (segIdx - 1)))
-        ret[:, ringIdxs] = ring
+        ret[:, grid[segIdx]] = innerVerts * (1.0 - perc) + outerVerts * perc
 
     return ret
 
@@ -664,18 +635,18 @@ def shell(
 
     faceVertIdxBorderPairs = findFaceVertBorderPairs(counts, faces)
 
-    bIdxs, edges = findSortedBorderEdges(counts, faces, faceVertIdxBorderPairs)
-    bUvIdxs, uvEdges = findSortedBorderEdges(counts, uvFaces, faceVertIdxBorderPairs)
-
-    outUvFaces, outUvCounts = shellUvTopo(
+    # Do the uvs
+    outUvFaces, outUvCounts, uvGrid, uvEdges, bUvIdxs = shellUvTopo(
         faceVertIdxBorderPairs, uvFaces, counts, len(uvs), numBridgeSegs
     )
-    outUvs = shellUvPos(uvs, bUvIdxs, uvEdges, numBridgeSegs, uvOffset)
+    outUvs = shellUvGridPos(uvs, uvGrid, uvEdges, uvOffset)
 
-    outVertCounts, outVertFaces, _ = shellTopo(
+
+    # Do the faces
+    outVertCounts, outVertFaces, vertGrid, bIdxs = shellTopo(
         faceVertIdxBorderPairs, faces, counts, anim.shape[1], numBridgeSegs
     )
-    outAnim = shellVertPos(anim, normals, bIdxs, numBridgeSegs, innerOffset, outerOffset)
+    outAnim = shellVertGridPos(anim, normals, vertGrid, innerOffset, outerOffset)
 
     if padded:
         outAnim = outAnim[0]
@@ -691,7 +662,7 @@ def _test():
     # Why json? Because fuck you flake8 for now allowing local ignores
 
     # 2x2x2 box with missing bottom face
-    jsInput = json.loads("""{
+    jsInput1 = json.loads("""{
         "anim" : [
             [-0.5, -0.5,  0.5], [ 0.0, -0.5,  0.5], [ 0.5, -0.5,  0.5],
             [-0.5,  0.0,  0.5], [ 0.0,  0.0,  0.5], [ 0.5,  0.0,  0.5],
@@ -736,7 +707,7 @@ def _test():
         ]
     }""")
 
-    jsCheck = json.loads("""{
+    jsCheck1 = json.loads("""{
         "anim": [
             [-0.57071,  0.57071,  0.500],   [ 0.000,    0.600,    0.500],   [0.57071,   0.57071,  0.500],
             [-0.57071,  0.57071,  0.000],   [ 0.000,    0.600,    0.000],   [0.57071,   0.57071,  0.000],
@@ -838,7 +809,7 @@ def _test():
 
 
     # 1x1x2 box with missing bottom face
-    jsInput = json.loads("""{
+    jsInput2 = json.loads("""{
         "anim": [
             [-5.0,  0.0,  5.0], [5.0,  0.0,  5.0], [-5.0,  0.0,  0.0], [5.0,  0.0,  0.0],
             [-5.0,  0.0, -5.0], [5.0,  0.0, -5.0], [-5.0, 10.0,  5.0], [5.0, 10.0,  5.0],
@@ -856,13 +827,13 @@ def _test():
             8,9,7,6,   10,11,9,8,  6,7,1,0,   7,9,3,1,
             9,11,5,3,  11,10,4,5,  10,8,2,4,  8,6,0,2
         ],
-       "uvFaces": [
+        "uvFaces": [
             2,3,1,0,     4,5,17,16,  0,1,7,6,     1,3,9,8,
             17,5,10,18,  5,4,12,11,  4,16,14,13,  2,0,15,19
         ]
     }""")
 
-    jsCheck = json.loads("""{
+    jsCheck2 = json.loads("""{
         "anim": [
             [-5.7071, 0.0, 5.7071], [5.7071, 0.0, 5.7071], [-6.0, 0.0, 0.0], [6.0, 0.0, 0.0],
             [-5.7071, 0.0, -5.7071], [5.7071, 0.0, -5.7071], [-5.57735, 10.57735, 5.57735],
@@ -925,7 +896,8 @@ def _test():
     }""")
 
 
-    jsInput = json.loads("""{
+    # 1x1x2 box with missing bottom face not split along median
+    jsInput3 = json.loads("""{
         "anim": [
             [-5.0, 0.0, 5.0], [5.0, 0.0, 5.0], [-5.0, 0.0, 0.0], [5.0, 0.0, 0.0],
             [-5.0, 0.0, -5.0], [5.0, 0.0, -5.0], [-5.0, 10.0, 5.0], [5.0, 10.0, 5.0],
@@ -948,9 +920,7 @@ def _test():
         ]
     }""")
 
-
-
-    jsCheck = json.loads("""{
+    jsCheck3 = json.loads("""{
         "anim": [
             [-5.7071, 0.0, 5.7071], [5.7071, 0.0, 5.7071], [-6.0, 0.0, 0.0], [6.0, 0.0, 0.0],
             [-5.7071, 0.0, -5.7071], [5.7071, 0.0, -5.7071], [-5.57735, 10.57735, 5.57735],
@@ -1008,8 +978,8 @@ def _test():
         ]
     }""")
 
-
-
+    jsInput = jsInput3
+    jsCheck = jsCheck3
 
 
 
@@ -1043,17 +1013,23 @@ def _test():
         numBridgeSegs,
     )
 
-    closeAnim = np.all(np.isclose(outAnim, chkAnim))
-    closeUvs = np.all(np.isclose(outUvs, chkUvs))
-    closeCounts = np.all(np.isclose(outCounts, chkCounts))
-    closeFaces = np.all(np.isclose(outFaces, chkFaces))
-    closeUvFaces = np.all(np.isclose(outUvFaces, chkUvFaces))
+    closeAnim = np.isclose(outAnim, chkAnim, rtol=1e-4)
+    closeUvs = np.isclose(outUvs, chkUvs, rtol=1e-4)
+    closeCounts = outCounts == chkCounts
+    closeFaces = outFaces == chkFaces
+    closeUvFaces = outUvFaces == chkUvFaces
 
-    assert closeAnim
-    assert closeUvs
-    assert closeCounts
-    assert closeFaces
-    assert closeUvFaces
+    closeAnimAll = np.all(closeAnim)
+    closeUvsAll = np.all(closeUvs)
+    closeCountsAll = np.all(closeCounts)
+    closeFacesAll = np.all(closeFaces)
+    closeUvFacesAll = np.all(closeUvFaces)
+
+    assert closeAnimAll
+    assert closeUvsAll
+    assert closeCountsAll
+    assert closeFacesAll
+    assert closeUvFacesAll
 
 
 if __name__ == "__main__":
