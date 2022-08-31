@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def _dot(A, B):
     """Get the lengths of a bunch of vectors
     Use the einsum instead of the dot product because its
@@ -202,7 +203,7 @@ def getEdgePairIdxs(counts, faces):
 
 
 def findInArray(needles, haystack):
-    """ Find the indices of values in an array
+    """Find the indices of values in an array
 
     Arguments:
         needles (np.array): The values to search for. May have any shape
@@ -223,6 +224,8 @@ def findInArray(needles, haystack):
 
     defaults[contains] = ret
     return defaults.reshape(nshape)
+
+
 # ---------------------------------------------------------------------
 
 
@@ -285,7 +288,7 @@ def findSortedBorderEdges(counts, faces, faceVertIdxBorderPairs):
 
 
 def buildBridgesByEdge(bVerts, edges, bridgeFirstIdx, numSegs):
-    """ Build the bridge faces
+    """Build the bridge faces
 
     Arguments:
         bVerts (np.array): The starting border vert indices
@@ -341,7 +344,7 @@ def buildBridgesByEdge(bVerts, edges, bridgeFirstIdx, numSegs):
 
 
 def buildBridgesByVert(bVerts, eVerts, edges, bridgeFirstIdx, numSegs):
-    """ Build the bridge faces
+    """Build the bridge faces
 
     Arguments:
         bVerts (np.array): The starting border vert indices
@@ -357,7 +360,6 @@ def buildBridgesByVert(bVerts, eVerts, edges, bridgeFirstIdx, numSegs):
         np.array: The flat array of new faces
         np.array: The flat array of new counts per face
     """
-
 
     grid = np.full((numSegs + 1, len(bVerts)), -1)
     grid[0] = bVerts
@@ -402,7 +404,9 @@ def shellUvTopo(faceVertIdxBorderPairs, oUvFaces, oUvCounts, numUVs, numBridgeSe
     bVerts, edges = findSortedBorderEdges(oUvCounts, oUvFaces, faceVertIdxBorderPairs)
 
     bridgeFirstIdx = numUVs * 2
-    bFaces, bCounts, grid = buildBridgesByEdge(bVerts, edges, bridgeFirstIdx, numBridgeSegs)
+    bFaces, bCounts, grid = buildBridgesByEdge(
+        bVerts, edges, bridgeFirstIdx, numBridgeSegs
+    )
 
     iUvFaces = reverseFaces(oUvCounts, oUvFaces) + numUVs
     faces = np.concatenate((oUvFaces, iUvFaces, bFaces))
@@ -412,7 +416,7 @@ def shellUvTopo(faceVertIdxBorderPairs, oUvFaces, oUvCounts, numUVs, numBridgeSe
 
 
 def shellTopo(faceVertIdxBorderPairs, oFaces, oCounts, vertCount, numBridgeSegs):
-    """ Build the vertex topology arrays for the shell
+    """Build the vertex topology arrays for the shell
 
     Arguments:
         faceVertIdxBorderPairs (np.array): N*2 array of indices
@@ -435,7 +439,9 @@ def shellTopo(faceVertIdxBorderPairs, oFaces, oCounts, vertCount, numBridgeSegs)
     eVerts = bVerts + vertCount
     bridgeFirstIdx = 2 * vertCount
 
-    bFaces, bCounts, grid = buildBridgesByVert(bVerts, eVerts, edges, bridgeFirstIdx, numBridgeSegs)
+    bFaces, bCounts, grid = buildBridgesByVert(
+        bVerts, eVerts, edges, bridgeFirstIdx, numBridgeSegs
+    )
 
     iFaces = reverseFaces(oCounts, oFaces) + vertCount
     faces = np.concatenate((oFaces, iFaces, bFaces))
@@ -445,6 +451,9 @@ def shellTopo(faceVertIdxBorderPairs, oFaces, oCounts, vertCount, numBridgeSegs)
 
 
 def _getOffsettedUvs(uvs, grid, edges, offset):
+    """Get the positions of the border UVs offsetted in space so I can interpolate
+    between these and the original ones
+    """
     # The given edges are at the outside of the current shells
     # Flip 'em so they're at the inside of the new bridge
     edges = np.flip(edges, axis=1)
@@ -460,57 +469,40 @@ def _getOffsettedUvs(uvs, grid, edges, offset):
     prevIdxs[prevFind == -1] = -1
     noPrevs = prevIdxs == -1
 
-
     midPts = ~noPrevs & ~noNxts
 
-
     # Figure out the outer vert positions, and set them in the reserved space
-    prevVecs = uvs[prevIdxs] - uvs[bVerts]
-    nxtVecs = uvs[nxtIdxs] - uvs[bVerts]
+    prevVecs = _norm(uvs[prevIdxs] - uvs[bVerts])
+    nxtVecs = _norm(uvs[nxtIdxs] - uvs[bVerts])
 
     # The only way I get zero length vecs is if I'm using the same idx
     # twice (via -1), so I can just ignore that part, and use the noPrevs/noNxts
 
-    prevVecs = _norm(prevVecs)
-    nxtVecs = _norm(nxtVecs)
-
-
     mPrevs = prevVecs[midPts]
     mNxts = nxtVecs[midPts]
 
-
-
     halfAngles = np.arctan2(_lens(mPrevs - mNxts), _lens(mPrevs + mNxts))
-
-
-
-
-
 
     cosAngles = np.cos(halfAngles)
     sinAngles = np.sin(halfAngles)
-    # Just for viewing:
-    cosAngles[np.abs(cosAngles) < 1.0e-6] = 0
-    sinAngles[np.abs(sinAngles) < 1.0e-6] = 0
 
-    rotMat = np.full((len(nxtVecs), 2, 2), np.nan)
-    rotMat[midPts, 0, 0] = cosAngles
-    rotMat[midPts, 0, 1] = -sinAngles
-    rotMat[midPts, 1, 1] = cosAngles
-    rotMat[midPts, 1, 0] = sinAngles
+    rotMats = np.full((len(nxtVecs), 2, 2), np.nan)
+    rotMats[midPts, 0, 0] = cosAngles
+    rotMats[midPts, 0, 1] = -sinAngles
+    rotMats[midPts, 1, 1] = cosAngles
+    rotMats[midPts, 1, 0] = sinAngles
 
-    r90 = np.array([[[0, -1], [1, 0]]])
-    rotMat[noPrevs] = r90
-    rotMat[noNxts] = -r90
-
+    r90 = np.array([[[0, 1], [-1, 0]]])
+    rotMats[noPrevs] = -r90
+    rotMats[noNxts] = r90
 
     toRot = nxtVecs
     toRot[noNxts] = prevVecs[noNxts]
-    rotVecs = np.einsum('ij, ijk -> ik', toRot, rotMat)
-
+    rotVecs = np.einsum('ij, ijk -> ik', toRot, rotMats)
 
     scales = np.full(len(rotVecs), offset)
-    scales[midPts] = offset * 2 / (1 - np.cos(halfAngles * 2))
+
+    scales[midPts] = offset / (1 - cosAngles * cosAngles)
     scales[scales > 20] = 20.0  # set a max value
 
     rotVecs *= scales[..., None]
@@ -551,13 +543,12 @@ def shellUvGridPos(uvs, grid, edges, offset):
 
 
 def shellVertGridPos(rawAnim, normals, grid, innerOffset, outerOffset):
-    """ Build the vertex positions for the shell
+    """Build the vertex positions for the shell
 
     Arguments:
         rawAnim (np.array): F*N*3 array of point positions
         normals (np.array): F*N*3 array of normal vectors
-        bIdxs (np.array): The indices of the border vertices
-        numBridgeSegs (int): The number of segments for the bridge
+        grid (np.array): The grid of border and bridge vert idxs
         innerOffset (float): The distance to move the inside of the shell
         outerOffset (float): The distance to move the outside of the shell
 
@@ -601,7 +592,7 @@ def shell(
     uvOffset,
     numBridgeSegs,
 ):
-    """ Extrude flat planes of geometry, give them thickness,
+    """Extrude flat planes of geometry, give them thickness,
     and add a number of loops to thickened edges
 
     Arguments:
@@ -629,7 +620,9 @@ def shell(
         anim = anim[None, ...]
 
     if numBridgeSegs < 1:
-        raise ValueError("The minimum number of bridge segments is 1. Got {0}".format(numBridgeSegs))
+        raise ValueError(
+            "The minimum number of bridge segments is 1. Got {0}".format(numBridgeSegs)
+        )
 
     normals = buildNormals(anim, counts, faces, triangulate=True)
 
@@ -641,7 +634,6 @@ def shell(
     )
     outUvs = shellUvGridPos(uvs, uvGrid, uvEdges, uvOffset)
 
-
     # Do the faces
     outVertCounts, outVertFaces, vertGrid, bIdxs = shellTopo(
         faceVertIdxBorderPairs, faces, counts, anim.shape[1], numBridgeSegs
@@ -652,8 +644,6 @@ def shell(
         outAnim = outAnim[0]
 
     return outAnim, outUvs, outVertCounts, outVertFaces, outUvFaces
-
-
 
 
 def _test():
