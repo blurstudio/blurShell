@@ -1,6 +1,80 @@
 import numpy as np
+from maya import cmds
+import maya.OpenMaya as om
+from dcc.maya.mayaToNumpy import mayaToNumpy, numpyToMaya
 
 
+# MAYA ONLY
+def getDagPath(objName):
+    """Get the MDagPath of an object, given its name"""
+    sel = om.MSelectionList()
+    sel.add(objName)
+    dagPath = om.MDagPath()
+    sel.getDagPath(0, dagPath)
+    return dagPath
+
+
+def getMeshDesc(objName):
+    """Get a full numpy description of a mesh"""
+    dp = getDagPath(objName)
+    meshFn = om.MFnMesh(dp)
+
+    verts = om.MPointArray()
+    meshFn.getPoints(verts)
+    verts = mayaToNumpy(verts)
+    verts = verts[:, :3]
+
+    counts, faces = om.MIntArray(), om.MIntArray()
+    meshFn.getVertices(counts, faces)
+    counts = mayaToNumpy(counts)
+    faces = mayaToNumpy(faces)
+
+    uvNames = []
+    meshFn.getUVSetNames(uvNames)
+
+    us = om.MFloatArray()
+    vs = om.MFloatArray()
+    meshFn.getUVs(us, vs, uvNames[0])
+    us = mayaToNumpy(us)
+    vs = mayaToNumpy(vs)
+    uvs = np.stack((us, vs)).T
+
+    uvCounts = om.MIntArray()
+    uvFaces = om.MIntArray()
+    meshFn.getAssignedUVs(uvCounts, uvFaces, uvNames[0])
+    uvFaces = mayaToNumpy(uvFaces)
+
+    return counts, verts, faces, uvs, uvFaces
+
+
+def createRawObject(name, counts, verts, faces, uvs=None, uvFaces=None):
+    """Build a mesh given the raw numpy data"""
+    dup = cmds.polyPlane(name=name, constructionHistory=False)[0]
+    dagPath = getDagPath(dup)
+    fnMesh = om.MFnMesh(dagPath)
+
+    counts = numpyToMaya(counts, om.MIntArray)
+    faces = numpyToMaya(faces, om.MIntArray)
+
+    nv = np.zeros((len(verts), 4))
+    nv[:, :3] = verts
+    verts = numpyToMaya(nv, om.MFloatPointArray)
+
+    fnMesh.createInPlace(verts.length(), counts.length(), verts, counts, faces)
+    fnMesh.updateSurface()
+
+    if uvs is not None:
+        us = numpyToMaya(uvs[:, 0], om.MFloatArray)
+        vs = numpyToMaya(uvs[:, 1], om.MFloatArray)
+        uvFaces = numpyToMaya(uvFaces, om.MIntArray)
+        fnMesh.setUVs(us, vs)
+        fnMesh.assignUVs(counts, uvFaces)
+
+    cmds.sets(dup, edit=True, forceElement='initialShadingGroup')
+    return dup
+
+
+# NO MORE MAYA-NESS
 def _dot(A, B):
     """Get the lengths of a bunch of vectors
     Use the einsum instead of the dot product because its
@@ -75,7 +149,7 @@ def triangulateFaces(counts, faces):
     return tris
 
 
-def buildNormals(anim, counts, faces, triangulate):
+def buildNormals(anim, counts, faces, triangulate=False):
     """Build the per-vertex normals for a mesh
 
     Arguments:
@@ -224,9 +298,6 @@ def findInArray(needles, haystack):
 
     defaults[contains] = ret
     return defaults.reshape(nshape)
-
-
-# ---------------------------------------------------------------------
 
 
 def findFaceVertBorderPairs(counts, faces):
