@@ -2,7 +2,7 @@ setlocal
 
 SET MAYA_VERSION=2020
 SET BUILD=mayabuild_%MAYA_VERSION%
-SET COMPILER=Visual Studio 15 2017 Win64
+SET COMPILER=Visual Studio 16 2019
 
 SET PFX=%~dp0
 cd %PFX%

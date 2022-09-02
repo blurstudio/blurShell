@@ -14,6 +14,7 @@ set(SOURCE_FILES
     "src/shell.h"
     "src/shell.cpp"
     "src/maxShellAlg.h"
+    "src/maxShellAlg_std_uv.h"
     "src/xxhash.c"
     "src/xxhash.h"
     "src/pluginMain.cpp"
@@ -25,5 +26,6 @@ add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES})
 target_link_libraries(${PROJECT_NAME} ${MAYA_LIBRARIES} ${OPENGL_LIBRARY} ${OpenMP_CXX_LIBRARIES})
 
 MAYA_PLUGIN(${PROJECT_NAME})
+set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
 install(TARGETS ${PROJECT_NAME} ${MAYA_TARGET_TYPE} DESTINATION plug-ins)
 

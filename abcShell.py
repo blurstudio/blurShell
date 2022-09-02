@@ -525,18 +525,15 @@ def _getOffsettedUvs(uvs, grid, edges, offset):
     """Get the positions of the border UVs offsetted in space so I can interpolate
     between these and the original ones
     """
-    # The given edges are at the outside of the current shells
-    # Flip 'em so they're at the inside of the new bridge
-    edges = np.flip(edges, axis=1)
     bVerts = grid[0]
 
-    nxtFind = findInArray(bVerts, edges[:, 0])
-    nxtIdxs = edges[nxtFind, 1]
+    nxtFind = findInArray(bVerts, edges[:, 1])
+    nxtIdxs = edges[nxtFind, 0]
     nxtIdxs[nxtFind == -1] = -1
     noNxts = nxtIdxs == -1
 
-    prevFind = findInArray(bVerts, edges[:, 1])
-    prevIdxs = edges[prevFind, 0]
+    prevFind = findInArray(bVerts, edges[:, 0])
+    prevIdxs = edges[prevFind, 1]
     prevIdxs[prevFind == -1] = -1
     noPrevs = prevIdxs == -1
 
