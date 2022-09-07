@@ -5,10 +5,13 @@
 
 #include <maya/MMatrix.h>
 #include <maya/MDoubleArray.h>
+#include <maya/MFloatArray.h>
 
 #include <maya/MPxNode.h> 
 #include <maya/MItGeometry.h>
 #include "xxhash.h"
+
+#include <vector>
 
 #define DEFORMER_NAME "shell"
 
@@ -26,6 +29,7 @@ public:
         
     static MObject aPosThickness; // float
     static MObject aNegThickness; // float
+    static MObject aUvThickness; // float
     static MObject aThickLoops; // int
 
     static const MTypeId id;
@@ -37,9 +41,9 @@ private:
 
     XXH64_hash_t cHash = 0;
     XXH64_hash_t fHash = 0;
-    MIntArray bVerts;
-    MIntArray newCount;
-    MIntArray newFaces;
+    std::vector<std::vector<size_t>> grid;
+    MIntArray newCount, newFaces, newUvCount, newUvFaces;
+    MFloatArray newUArray, newVArray;
     MObject outMesh;
     int loopStore = 0;
 };
