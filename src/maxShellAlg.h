@@ -197,7 +197,7 @@ findSortedBorderEdges(
     std::vector<size_t> bVerts;
     bVerts.reserve(edges.first.size() + stopIdxs.size());
     for (size_t p = 0, i = 0; i < edges.first.size(); ++i){
-        if (stopIdxs[p] == i){
+        if ((p < stopIdxs.size()) && (stopIdxs[p] == i)){
             bVerts.push_back(edges.second[i]);
             ++ p;
         }
@@ -319,10 +319,10 @@ shellUvTopo(
         bVerts, edges, bridgeFirstIdx, numBridgeSegs
     );
 
-    std::vector<size_t> iUvFaces = reverseFaces(oUvCounts, oUvFaces, 0);
+    std::vector<size_t> iUvFaces = reverseFaces(oUvCounts, oUvFaces, numUVs);
 
     std::vector<size_t> faces(oUvFaces);
-    faces.insert(faces.end(), iUvFaces.rbegin(), iUvFaces.rend());
+    faces.insert(faces.end(), iUvFaces.begin(), iUvFaces.end());
     faces.insert(faces.end(), bFaces.begin(), bFaces.end());
 
     std::vector<size_t> counts(oUvCounts);
@@ -471,8 +471,8 @@ std::vector<float> _getOffsettedUvs(
         float cos = std::cos(halfAngle);
         float sin = std::sin(halfAngle);
 
-        outerVerts.push_back((cos * nU - sin * nV) * offset + bU);
-        outerVerts.push_back((sin * nU + cos * nV) * offset + bV);
+        outerVerts.push_back((cos * nU + sin * nV) * offset + bU);
+        outerVerts.push_back((-sin * nU + cos * nV) * offset + bV);
     }
     return outerVerts;
 }

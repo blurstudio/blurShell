@@ -205,47 +205,23 @@ MStatus shell::compute(
     XXH64_hash_t fHashChk = XXH3_64bits(&(faces[0]), faces.length() * sizeof(int));
     bool needNewTopo = (loops != loopStore) || (cHashChk != cHash) || (fHashChk != fHash);
     if (needNewTopo) {
+
+
+        // Convert the Maya faces to std::vectors
         std::vector<size_t> stdFaces;
         stdFaces.reserve(faces.length());
         for (auto f : faces) {
             stdFaces.push_back(f);
         }
-
         std::vector<size_t> stdCount;
         stdCount.reserve(count.length());
         for (auto c : count) {
             stdCount.push_back(c);
         }
 
-        stdFaces = reverseFaces(stdCount, stdFaces, 0);
-        auto faceVertIdxBorderPairs = findFaceVertBorderPairs(stdCount, stdFaces);
-        auto [stdCountOut, stdFacesOut, retGrid, bVerts] = shellTopo(faceVertIdxBorderPairs, stdFaces, stdCount, inFnMesh.numVertices(), loops);
-        stdFacesOut = reverseFaces(stdCountOut, stdFacesOut, 0);
-
-        newCount.setLength((uint)stdCountOut.size());
-        for (size_t i = 0; i < stdCountOut.size(); ++i) {
-            newCount[(uint)i] = (int)stdCountOut[i];
-        }
-        newFaces.setLength((uint)stdFacesOut.size());
-        for (size_t i = 0; i < stdFacesOut.size(); ++i) {
-            newFaces[(uint)i] = (int)stdFacesOut[i];
-        }
-
-        grid = retGrid;
-
-        MFloatArray uArray, vArray;
-        inFnMesh.getUVs(uArray, vArray);
-        std::vector<float> uvs;
-        uvs.reserve((size_t)uArray.length() * 2);
-
-        for (uint i = 0; i < uArray.length(); ++i) {
-            uvs.push_back(uArray[i]);
-            uvs.push_back(vArray[i]);
-        }
-
+        // Get UV faces and copy to std::vectors
         MIntArray uvCount, uvFaces;
         inFnMesh.getAssignedUVs(uvCount, uvFaces);
-
 
         std::vector<size_t> stdUvCount;
         stdUvCount.reserve(uvCount.length());
@@ -259,15 +235,35 @@ MStatus shell::compute(
             stdUvFaces.push_back(f);
         }
 
-        auto [stdUvFacesOut, stdUvCountOut, uvGrid, uvEdges, bUvIdxs] = shellUvTopo(faceVertIdxBorderPairs, stdUvFaces, stdUvCount, uvs.size() / 2, loops);
 
-        std::vector<float> newUvs = shellUvGridPos(uvs, uvGrid, uvEdges, uvOffset);
-        newUArray.setLength((uint)newUvs.size() / 2);
-        newVArray.setLength((uint)newUvs.size() / 2);
-        for (uint i = 0; i < newUvs.size() / 2; i++) {
-                newUArray[i] = newUvs[2 * (size_t)i];
-                newVArray[i] = newUvs[2 * (size_t)i + 1];
+        // Maya vs Max algorithm
+        // The winding is backward in Max, but I want to keep the algorithm
+        // consistent, so I pre/post reverse the faces
+        stdFaces = reverseFaces(stdCount, stdFaces, 0);
+        stdUvFaces = reverseFaces(stdUvCount, stdUvFaces, 0);
+
+        auto faceVertIdxBorderPairs = findFaceVertBorderPairs(stdCount, stdFaces);
+        auto [stdCountOut, stdFacesOut, retGrid, bVerts] = shellTopo(faceVertIdxBorderPairs, stdFaces, stdCount, inFnMesh.numVertices(), loops);
+        auto [stdUvFacesOut, stdUvCountOut, uvGrid, uvEdges, bUvIdxs] = shellUvTopo(faceVertIdxBorderPairs, stdUvFaces, stdUvCount, inFnMesh.numUVs(), loops);
+        grid = retGrid;
+
+        stdFacesOut = reverseFaces(stdCountOut, stdFacesOut, 0);
+        stdUvFacesOut = reverseFaces(stdUvCountOut, stdUvFacesOut, 0);
+
+
+
+
+        // Build the output maya arrays for the faces
+        newCount.setLength((uint)stdCountOut.size());
+        for (size_t i = 0; i < stdCountOut.size(); ++i) {
+            newCount[(uint)i] = (int)stdCountOut[i];
         }
+        newFaces.setLength((uint)stdFacesOut.size());
+        for (size_t i = 0; i < stdFacesOut.size(); ++i) {
+            newFaces[(uint)i] = (int)stdFacesOut[i];
+        }
+
+        // Build the output maya arrays for the UVs
         newUvCount.setLength((uint)stdUvCountOut.size());
         for (size_t i = 0; i < stdUvCountOut.size(); ++i) {
             newUvCount[(uint)i] = (int)stdUvCountOut[i];
@@ -276,9 +272,34 @@ MStatus shell::compute(
         for (size_t i = 0; i < stdUvFacesOut.size(); ++i) {
             newUvFaces[(uint)i] = (int)stdUvFacesOut[i];
         }
+
+
+
+
+        // Calculate the static UV positions
+        MFloatArray uArray, vArray;
+        inFnMesh.getUVs(uArray, vArray);
+        std::vector<float> uvs;
+        uvs.reserve((size_t)uArray.length() * 2);
+
+        for (uint i = 0; i < uArray.length(); ++i) {
+            uvs.push_back(uArray[i]);
+            uvs.push_back(vArray[i]);
+        }
+
+        std::vector<float> newUvs = shellUvGridPos(uvs, uvGrid, uvEdges, uvOffset);
+        newUArray.setLength((uint)newUvs.size() / 2);
+        newVArray.setLength((uint)newUvs.size() / 2);
+        for (uint i = 0; i < newUvs.size() / 2; i++) {
+                newUArray[i] = newUvs[2 * (size_t)i];
+                newVArray[i] = newUvs[2 * (size_t)i + 1];
+        }
+
+
+
     }
 
-    // Do the point positions
+    // Always calculate the dynamic vertex point positions
     MFloatPointArray verts, newVerts;
     MFloatVectorArray normals;
     inFnMesh.getPoints(verts);
@@ -289,21 +310,14 @@ MStatus shell::compute(
 
     if (needNewTopo) {
         // Create a new mesh MObject
-        MString mapName("shellMap");
-
         MFnMeshData meshCreator;
         outMesh = meshCreator.create();
-
         MFnMesh meshFn;
         meshFn.create(newVerts.length(), newCount.length(), newVerts, newCount, newFaces, outMesh);
         meshFn.setUVs(newUArray, newVArray);
         meshFn.assignUVs(newUvCount, newUvFaces);
 
         hOutput.set(outMesh);
-        //MFnMesh meshFn(outMesh);
-        //meshFn.createInPlace(newVerts.length(), newCount.length(), newVerts, newCount, newFaces);
-
-
     }
     else {
         hOutput.set(outMesh);
