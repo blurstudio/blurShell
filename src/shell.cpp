@@ -1,6 +1,7 @@
 #include <maya/MTypeId.h> 
 
 #include <maya/MTime.h> 
+#include <maya/MString.h> 
 #include <maya/MMatrix.h>
 #include <maya/MDoubleArray.h>
 #include <maya/MPoint.h>
@@ -15,6 +16,7 @@
 
 #include <maya/MFnNurbsSurface.h>
 #include <maya/MFnMesh.h>
+#include <maya/MFnMeshData.h>
 
 #include <maya/MFnUnitAttribute.h>
 #include <maya/MFnNumericAttribute.h>
@@ -52,24 +54,28 @@ MFloatPointArray shellVertGridPosMaya(
 
     MFloatPointArray ret;
     uint r = 0;
-    ret.setLength(2 * verts.length() + bVertCount * 3);
+    ret.setLength(2 * verts.length() + bVertCount);
 
     for (uint i = 0; i < verts.length(); ++i){
-        ret[r++] = verts[i] - normals[i] * outerOffset;
+        ret[r++] = verts[i] + normals[i] * outerOffset;
     }
     for (uint i = 0; i < verts.length(); ++i){
-        ret[r++] = verts[i] + normals[i] * innerOffset;
+        ret[r++] = verts[i] - normals[i] * innerOffset;
     }
 
     for (uint segIdx = 1; segIdx < numBridgeSegs; ++segIdx){
         float perc = (float)segIdx / (float)(grid.size() - 1);
-        for (uint vIdx = 0; vIdx < grid[segIdx].size() / 3; ++vIdx){
+        for (uint vIdx = 0; vIdx < grid[segIdx].size(); ++vIdx){
             uint tar = (uint)grid[segIdx][vIdx];
             uint iSrc = (uint)bVerts[vIdx];
             uint oSrc = (uint)eVerts[vIdx];
-            ret[tar] = verts[iSrc] * (1.0 - perc) + verts[oSrc] * perc;
+            auto vi = ret[iSrc];
+            auto vo = ret[oSrc];
+            auto vip = vi * (1.0f - perc);
+            auto vop = vo * perc;
+            auto rr = vip + vop;
+            ret[tar] = rr;
         }
-
     }
     return ret;
 }
@@ -188,8 +194,6 @@ MStatus shell::compute(
 	int loops = hLoops.asInt();
 
 	MDataHandle hInput = dataBlock.inputValue(aInputGeom);
-	MDataHandle hOutput = dataBlock.outputValue(aOutputGeom);
-
     MObject inMesh = hInput.asMesh();
     MFnMesh inFnMesh(inMesh);
 
@@ -213,12 +217,19 @@ MStatus shell::compute(
             stdCount.push_back(c);
         }
 
+        stdFaces = reverseFaces(stdCount, stdFaces, 0);
         auto faceVertIdxBorderPairs = findFaceVertBorderPairs(stdCount, stdFaces);
-        //auto [newCount, newFaces, retGrid, bVerts] = shellTopo(faceVertIdxBorderPairs, stdFaces, stdCount, inFnMesh.numVertices(), loops);
+        auto [stdCountOut, stdFacesOut, retGrid, bVerts] = shellTopo(faceVertIdxBorderPairs, stdFaces, stdCount, inFnMesh.numVertices(), loops);
+        stdFacesOut = reverseFaces(stdCountOut, stdFacesOut, 0);
 
-        auto x = shellTopo(faceVertIdxBorderPairs, stdFaces, stdCount, inFnMesh.numVertices(), loops);
-
-        auto [newCount, newFaces, retGrid, bVerts] = x;
+        newCount.setLength((uint)stdCountOut.size());
+        for (size_t i = 0; i < stdCountOut.size(); ++i) {
+            newCount[(uint)i] = (int)stdCountOut[i];
+        }
+        newFaces.setLength((uint)stdFacesOut.size());
+        for (size_t i = 0; i < stdFacesOut.size(); ++i) {
+            newFaces[(uint)i] = (int)stdFacesOut[i];
+        }
 
         grid = retGrid;
 
@@ -248,14 +259,22 @@ MStatus shell::compute(
             stdUvFaces.push_back(f);
         }
 
-        auto [newUvFaces, newUvCount, uvGrid, uvEdges, bUvIdxs] = shellUvTopo(faceVertIdxBorderPairs, stdUvFaces, stdUvCount, uvs.size() / 2, loops);
+        auto [stdUvFacesOut, stdUvCountOut, uvGrid, uvEdges, bUvIdxs] = shellUvTopo(faceVertIdxBorderPairs, stdUvFaces, stdUvCount, uvs.size() / 2, loops);
 
         std::vector<float> newUvs = shellUvGridPos(uvs, uvGrid, uvEdges, uvOffset);
         newUArray.setLength((uint)newUvs.size() / 2);
         newVArray.setLength((uint)newUvs.size() / 2);
         for (uint i = 0; i < newUvs.size() / 2; i++) {
-                newUArray[2 * i] = newUvs[i];
-                newVArray[2 * i + 1] = newUvs[i];
+                newUArray[i] = newUvs[2 * (size_t)i];
+                newVArray[i] = newUvs[2 * (size_t)i + 1];
+        }
+        newUvCount.setLength((uint)stdUvCountOut.size());
+        for (size_t i = 0; i < stdUvCountOut.size(); ++i) {
+            newUvCount[(uint)i] = (int)stdUvCountOut[i];
+        }
+        newUvFaces.setLength((uint)stdUvFacesOut.size());
+        for (size_t i = 0; i < stdUvFacesOut.size(); ++i) {
+            newUvFaces[(uint)i] = (int)stdUvFacesOut[i];
         }
     }
 
@@ -266,14 +285,25 @@ MStatus shell::compute(
     inFnMesh.getVertexNormals(false, normals);
     newVerts = shellVertGridPosMaya(verts, normals, grid, neg, pos);
 
+	MDataHandle hOutput = dataBlock.outputValue(aOutputGeom);
+
     if (needNewTopo) {
         // Create a new mesh MObject
-        hOutput.set(inMesh);
-        outMesh = hOutput.asMesh();
-        MFnMesh meshFn(outMesh);
-        meshFn.createInPlace(newVerts.length(), newCount.length(), newVerts, newCount, newFaces);
-        meshFn.assignUVs(newUvCount, newUvFaces);
+        MString mapName("shellMap");
+
+        MFnMeshData meshCreator;
+        outMesh = meshCreator.create();
+
+        MFnMesh meshFn;
+        meshFn.create(newVerts.length(), newCount.length(), newVerts, newCount, newFaces, outMesh);
         meshFn.setUVs(newUArray, newVArray);
+        meshFn.assignUVs(newUvCount, newUvFaces);
+
+        hOutput.set(outMesh);
+        //MFnMesh meshFn(outMesh);
+        //meshFn.createInPlace(newVerts.length(), newCount.length(), newVerts, newCount, newFaces);
+
+
     }
     else {
         hOutput.set(outMesh);

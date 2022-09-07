@@ -246,19 +246,6 @@ buildBridgesByEdge(
     std::vector<size_t> faces;
     faces.reserve(numSegs * (bVerts.size() - 1));
     for (size_t i = 0; i < grid.size() - 1; ++i){
-
-        /*
-        for (size_t j = 0; j < grid[i].size() - 1; ++j){
-            auto eis = edgeInsertIdxs.second[j];
-            auto eif = edgeInsertIdxs.first[j];
-
-            faces.push_back(grid[i + 1][eis]);
-            faces.push_back(grid[i + 1][eif]);
-            faces.push_back(grid[i][eif]);
-            faces.push_back(grid[i][eis]);
-        }
-        */
-
         for (size_t j = 0; j < edgeInsertIdxs.first.size(); ++j){
             auto eis = edgeInsertIdxs.second[j];
             auto eif = edgeInsertIdxs.first[j];
@@ -268,9 +255,6 @@ buildBridgesByEdge(
             faces.push_back(grid[i][eif]);
             faces.push_back(grid[i][eis]);
         }
-
-
-
     }
 
     std::vector<size_t> counts((edges.first.size() * numSegs), 4);
@@ -370,10 +354,9 @@ shellTopo(
         bVerts, eVerts, edges, bridgeFirstIdx, numBridgeSegs
     );
 
-    std::vector<size_t> iFaces = reverseFaces(oCounts, oFaces, 0);
-
+    std::vector<size_t> iFaces = reverseFaces(oCounts, oFaces, vertCount);
     std::vector<size_t> faces(oFaces);
-    faces.insert(faces.end(), iFaces.rbegin(), iFaces.rend());
+    faces.insert(faces.end(), iFaces.begin(), iFaces.end());
     faces.insert(faces.end(), bFaces.begin(), bFaces.end());
     
     std::vector<size_t> counts(oCounts);
@@ -391,46 +374,37 @@ std::vector<float> _getOffsettedUvs(
     float offset
 ){
     const auto& bVerts = grid[0];
-    
 
+    std::vector<bool> midPtBool(bVerts.size(), true);
+    std::vector<size_t> nxtIdxs, noNxts;
+    std::vector<size_t> prevIdxs, noPrevs;
+    nxtIdxs.reserve(bVerts.size());
+    prevIdxs.reserve(bVerts.size());
 
 
     auto nxtFind = findInArray(bVerts, edges.second);
-    std::vector<bool> midPtBool(nxtFind.size(), true);
-    std::vector<size_t> nxtIdxs, noNxts;
-    nxtIdxs.reserve(nxtFind.size());
-    for (size_t i = 0; i < nxtFind.size(); ++i){
+    for (size_t i = 0; i < bVerts.size(); ++i){
         size_t nfi = nxtFind[i];
-        if (nfi = std::numeric_limits<size_t>::max()) {
-            continue;
-        }
-
-        size_t f = edges.first[nfi];
-        if (f == std::numeric_limits<size_t>::max()){
+        if (nfi == std::numeric_limits<size_t>::max()) {
             noNxts.push_back(nxtIdxs.size());
             nxtIdxs.push_back(std::numeric_limits<size_t>::max());
             midPtBool[i] = false;
         }
         else {
-            nxtIdxs.push_back(edges.first[f]);
+            nxtIdxs.push_back(edges.first[nfi]);
         }
-
-
-
     }
 
     auto prevFind = findInArray(bVerts, edges.first);
-    std::vector<size_t> prevIdxs, noPrevs;
-    prevIdxs.reserve(prevFind.size());
-    for (size_t i = 0; i < prevFind.size(); ++i){
-        size_t f = edges.second[prevFind[i]];
-        if (f == std::numeric_limits<size_t>::max()){
+    for (size_t i = 0; i < bVerts.size(); ++i){
+        size_t pfi = prevFind[i];
+        if (pfi == std::numeric_limits<size_t>::max()){
             noPrevs.push_back(prevIdxs.size());
             prevIdxs.push_back(std::numeric_limits<size_t>::max());
             midPtBool[i] = false;
         }
         else {
-            prevIdxs.push_back(edges.second[f]);
+            prevIdxs.push_back(edges.second[pfi]);
         }
     }
 
@@ -477,7 +451,11 @@ std::vector<float> _getOffsettedUvs(
             }
         }
 
-        if ((pI == std::numeric_limits<size_t>::max()) || (nI == std::numeric_limits<size_t>::max())) continue;
+        if ((pI == std::numeric_limits<size_t>::max()) || (nI == std::numeric_limits<size_t>::max())) {
+            outerVerts.push_back(0.0f);
+            outerVerts.push_back(0.0f);
+            continue;
+        }
 
         // s for subtract
         float sx = pU - nU;
@@ -507,8 +485,8 @@ std::vector<float> shellUvGridPos(
     float offset
 ){
     size_t numBridgeSegs = grid.size() - 1;
-    auto& bVerts = grid[0];
-    auto& eVerts = grid[numBridgeSegs];
+    const std::vector<size_t>& bVerts = grid[0];
+    const std::vector<size_t>& eVerts = grid[numBridgeSegs];
 
     std::vector<float> ret(uvs);
     ret.insert(ret.end(), uvs.begin(), uvs.end());
@@ -516,8 +494,8 @@ std::vector<float> shellUvGridPos(
 
     std::vector<float> outerVerts = _getOffsettedUvs(uvs, grid, edges, offset);
     for (size_t i = 0; i < eVerts.size(); ++i){
-        ret[(size_t)eVerts[i] * 2] = outerVerts[i * 2];
-        ret[(size_t)eVerts[i] * 2 + 1] = outerVerts[i * 2 + 1];
+        ret[eVerts[i] * 2] = outerVerts[i * 2];
+        ret[eVerts[i] * 2 + 1] = outerVerts[i * 2 + 1];
     }
 
     for (size_t segIdx = 1; segIdx < numBridgeSegs; ++segIdx) {
@@ -531,7 +509,6 @@ std::vector<float> shellUvGridPos(
             }
         }
     }
-
 
     return ret;
 }
@@ -559,7 +536,6 @@ std::vector<float> shellVertGridPos(
     for (size_t i = 0; i < verts.size(); ++i){
         ret.push_back(verts[i] + normals[i] * innerOffset);
     }
-    ret.resize(ret.size() + bVertCount * 3);
 
     for (size_t segIdx = 1; segIdx < numBridgeSegs; ++segIdx){
         float perc = (float)segIdx / (float)(grid.size() - 1);
