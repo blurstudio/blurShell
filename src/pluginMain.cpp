@@ -1,10 +1,11 @@
 #include <maya/MFnPlugin.h>
 #include <maya/MGlobal.h>
 #include "shell.h"
+#include "version.h"
 
 MStatus initializePlugin(MObject obj) {
 	MStatus result;
-	MFnPlugin plugin(obj, "Blur Studio", "1.0", "Any");
+	MFnPlugin plugin(obj, "Blur Studio", VERSION_STRING, "Any");
 	result = plugin.registerNode(
         DEFORMER_NAME,
         shell::id,
